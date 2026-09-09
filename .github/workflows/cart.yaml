@@ -19,15 +19,18 @@ jobs:
   payment:
     name: Build and deploy cart microservice
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cart
 
     steps:
-      - name: Checkout code 
+      - name: Checkout code
         uses: actions/checkout@v2
         with:
           fetch-depth: 0
 
       - name: NPM install
-        run: npm install 
+        run: npm install
 
       - name: Build Docker image
         run: |
