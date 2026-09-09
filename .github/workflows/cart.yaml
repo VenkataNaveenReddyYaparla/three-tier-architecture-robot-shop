@@ -35,12 +35,11 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t cart .  # Build image tagged as 'payment' from current directory
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/cart:latest .
 
       - name: Docker Login (use secrets)
         run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
 
       - name: Docker Push
         run: |
-          docker built ${{ secrets.DOCKERHUB_USERNAME }}/cart:latest
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/cart:latest
