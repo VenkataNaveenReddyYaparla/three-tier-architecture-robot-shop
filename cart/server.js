@@ -7,7 +7,6 @@ instana({
     }
 });
 
-
 const redis = require('redis');
 const request = require('request');
 const bodyParser = require('body-parser');
