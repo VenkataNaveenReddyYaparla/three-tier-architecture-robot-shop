@@ -41,5 +41,4 @@ jobs:
 
       - name: Docker Push
         run: |
-          docker tag catalogue ${{secrets.DOCKERHUB_USERNAME}}/catalogue:latest
-          docker catalogue ${{secrets.DOCKERHUB_USERNAME}}/catalogue:latest
+          docker push ${{secrets.DOCKERHUB_USERNAME}}/catalogue:latest
