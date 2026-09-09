@@ -18,7 +18,10 @@ on:
 jobs:
   payment:
     name: Build and deploy catalogue microservice
-    runs-on: [self-hosted]  # Use a standard runner instead of self-hosted
+    runs-on: ubuntu-latest  # Use a standard runner instead of self-hosted
+    defaults:
+      run:
+        working-directory: catalogue
 
     steps:
       - name: Checkout code 
@@ -38,5 +41,5 @@ jobs:
 
       - name: Docker Push
         run: |
-          docker tag catalogue ${name}/catalogue:latest
-          docker catalogue ${name}/catalogue:latest
+          docker tag catalogue ${{secrets.DOCKERHUB_USERNAME}}/catalogue:latest
+          docker catalogue ${{secrets.DOCKERHUB_USERNAME}}/catalogue:latest
