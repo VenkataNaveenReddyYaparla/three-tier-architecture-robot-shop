@@ -18,7 +18,7 @@ on:
 jobs:
   payment:
     name: Build and deploy cart microservice
-    runs-on: [self-hosted]  # Use a standard runner instead of self-hosted
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code 
@@ -34,9 +34,9 @@ jobs:
           docker build -t cart .  # Build image tagged as 'payment' from current directory
 
       - name: Docker Login (use secrets)
-        run: docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }}
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
 
       - name: Docker Push
         run: |
-          docker tag cart ${name}/cart:latest
-          docker push ${name}/cart:latest
+          docker tag cart ${{ secrets.DOCKERHUB_USERNAME }}/cart:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/cart:latest
