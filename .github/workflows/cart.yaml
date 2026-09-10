@@ -30,9 +30,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: NPM install
-        run: npm install
-
       - name: Build Docker image
         run: |
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/cart:latest .
