@@ -17,7 +17,7 @@ on:
 
 
 jobs:
-  payment:
+  cart:
     name: Build and deploy cart microservice
     runs-on: ubuntu-latest
     defaults:
