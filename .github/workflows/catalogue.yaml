@@ -5,18 +5,18 @@ on:
     branches:
       - master
     paths:
-      - '**.js'  # Only trigger on changes to Python files (**.js)
+      - 'catalogue/**'  # Only trigger on changes to catalogue microservice files
       - '.github/workflows/catalogue.yaml'  # Include workflow file changes
 
   pull_request:
     branches:
       - master
     paths:
-      - '**.js'  # Only trigger on changes to Python files (**.js)
+      - 'catalogue/**'  # Only trigger on changes to catalogue microservice files
       - '.github/workflows/catalogue.yaml'  # Include workflow file changes
 
 jobs:
-  payment:
+  catalogue:
     name: Build and deploy catalogue microservice
     runs-on: ubuntu-latest  # Use a standard runner instead of self-hosted
     defaults:
@@ -26,11 +26,7 @@ jobs:
     steps:
       - name: Checkout code 
         uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
-
-      - name: NPM install
-        run: npm install 
+        
 
       - name: Build Docker image
         run: |

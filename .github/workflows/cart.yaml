@@ -5,14 +5,14 @@ on:
     branches:
       - master
     paths:
-      - '**.js'  # Only trigger on changes to Python files (**.py)
+      - 'cart/**'  # Only trigger on push to cart microservice files
       - '.github/workflows/cart.yaml'  # Include workflow file changes
 
   pull_request:
     branches:
       - master
     paths:
-      - '**.js'  # Only trigger on changes to Python files (**.py)
+      - 'cart/**'  # triggers on PR to master branch for changes to cart microservice files
       - '.github/workflows/cart.yaml'  # Include workflow file changes
 
 
@@ -28,7 +28,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-        
+
       - name: Build Docker image
         run: |
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/cart:latest .
