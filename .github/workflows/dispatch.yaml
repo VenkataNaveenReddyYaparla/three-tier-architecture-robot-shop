@@ -6,7 +6,8 @@ on:
       - master
     paths:
       - '**.go'  # Only trigger on changes to Python files (**.py)
-      - '.github/workflows/dispatch.yaml'  # Include workflow file changes
+      - '.github/workflows/dispatch.yaml'
+      - 'dispatch/**'  # Include workflow file changes
 
   pull_request:
     branches:
