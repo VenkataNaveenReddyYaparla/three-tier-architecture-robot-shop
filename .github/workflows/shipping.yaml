@@ -19,7 +19,9 @@ jobs:
   shipping:
     name: Build and deploy shipping microservice
     runs-on: ubuntu-latest
-
+    defaults:
+      run:
+        working-directory:  shipping
     steps:
       - name: Checkout code 
         uses: actions/checkout@v7
