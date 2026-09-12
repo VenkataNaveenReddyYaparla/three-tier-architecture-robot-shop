@@ -7,6 +7,7 @@ on:
     paths:
       - '**.java'  # Only trigger on changes to java files (*.java)
       - '.github/workflows/shipping.yaml'  # Include workflow file changes
+      - 'shipping/Dockerfile'
 
   pull_request:
     branches:

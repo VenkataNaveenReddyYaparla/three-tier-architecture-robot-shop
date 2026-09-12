@@ -10,7 +10,7 @@ RUN mvn dependency:resolve
 COPY src /opt/shipping/src/
 RUN mvn package
 
-# Run time 
+# Run time env
 
 FROM openjdk:8-jre
 
