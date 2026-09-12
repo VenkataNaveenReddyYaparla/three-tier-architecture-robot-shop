@@ -18,25 +18,23 @@ on:
 jobs:
   payment:
     name: Build and deploy payment microservice
-    runs-on: [self-hosted]  # Use a standard runner instead of self-hosted
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: payment
 
     steps:
       - name: Checkout code 
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@v7
 
-      - name:  Python install
-        run: sudo apt-get install python3 
 
       - name: Build Docker image
         run: |
-          docker build -t payment .  # Build image tagged as 'payment' from current directory
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME}}/payment:${{github.run_number}} .  # Build image tagged as 'payment' from current directory
 
       - name: Docker Login (use secrets)
         run: docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Docker Push
         run: |
-          docker tag payment ${name}/payment:latest
-          docker push ${name}/payment:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME}}/payment:${{github.run_number}} 
