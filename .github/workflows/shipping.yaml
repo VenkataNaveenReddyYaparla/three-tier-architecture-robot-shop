@@ -1,44 +1,36 @@
-name: Dispatch
+name: shipping
 
 on:
   push:
     branches:
       - master
     paths:
-      - '**.java'  # Only trigger on changes to Python files (**.py)
+      - '**.java'  # Only trigger on changes to java files (*.java)
       - '.github/workflows/shipping.yaml'  # Include workflow file changes
 
   pull_request:
     branches:
       - master
     paths:
-      - '**.java'  # Only trigger on changes to Python files (**.py)
+      - '**.java'  # Only trigger PR Raise on  java files (*.java)
       - '.github/workflows/shipping.yaml'  # Include workflow file changes
 
 jobs:
-  payment:
+  shipping:
     name: Build and deploy shipping microservice
-    runs-on: [self-hosted]  # Use a standard runner instead of self-hosted
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code 
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
-
-      - name:  Go install
-        run: |
-            sudo apt-get install openjdk 17 |
-            java -version
+        uses: actions/checkout@v7
 
       - name: Build Docker image
         run: |
-          docker build -t shipping . 
+          docker build -t ${{secrets.DOCKERHUB_USERNAME}}/shipping:${{ github.run_number}}
 
       - name: Docker Login (use secrets)
         run: docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Docker Push
         run: |
-          docker tag shipping ${name}/shipping:latest
-          docker push ${name}/shipping:latest
+          docker push ${{secrets.DOCKERHUB_USERNAME}}/shipping:${{ github.run_number}}

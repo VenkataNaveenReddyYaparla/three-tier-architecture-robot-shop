@@ -12,25 +12,25 @@ on:
     branches:
       - master
     paths:
-      - 'catalogue/**'  # Only trigger on changes to catalogue microservice files
+      - 'catalogue/**'  # Only trigger a PR raise to catalogue microservice files
       - '.github/workflows/catalogue.yaml'  # Include workflow file changes
 
 jobs:
   catalogue:
     name: Build and deploy catalogue microservice
-    runs-on: ubuntu-latest  # Use a standard runner instead of self-hosted
+    runs-on: ubuntu-latest  # standard runner
     defaults:
       run:
         working-directory: catalogue
 
     steps:
       - name: Checkout code 
-        uses: actions/checkout@v2
+        uses: actions/checkout@v7
         
 
       - name: Build Docker image
         run: |
-          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/catalogue:${{ github.run_number }} .  # Build image tagged as 'payment' from current directory
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/catalogue:${{ github.run_number }} .  # Build image tagged as 'catalogue' from current directory
 
       - name: Docker Login (use secrets)
         run: docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }}
