@@ -12,7 +12,7 @@ RUN mvn package
 
 # Run time 
 
-FROM openjdk:8-jdk
+FROM openjdk:8-jre
 
 EXPOSE 8080
 
