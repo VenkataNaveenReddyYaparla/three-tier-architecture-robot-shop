@@ -12,7 +12,8 @@ RUN mvn package
 
 # Run time env
 
-FROM openjdk:8-jre
+FROM eclipse-temurin:25-jre-alpine
+
 
 EXPOSE 8080
 
