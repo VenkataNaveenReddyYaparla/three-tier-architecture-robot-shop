@@ -1,0 +1,39 @@
+name: Web
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'web/**'
+      - '.github/workflows/web.yml'
+
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'web/**'
+      - '.github/workflows/web.yml'
+
+jobs:
+  web:
+    name: Build and deploy web microservice
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Build Docker image
+        run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/web:${{ github.run_number }} .
+
+      - name: Docker Login
+        if: github.event_name == 'push'
+        run: docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" -p "${{ secrets.DOCKERHUB_TOKEN }}"
+
+      - name: Docker Push
+        if: github.event_name == 'push'
+        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/web:${{ github.run_number }}
