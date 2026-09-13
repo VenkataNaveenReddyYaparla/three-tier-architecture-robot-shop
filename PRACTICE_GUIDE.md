@@ -1,35 +1,71 @@
 <div align="center">
-  <h1>🛠️ DevOps Practice Guide</h1>
-  <p><i>Your quick reference for mastering DevOps with Stan's Robot Shop</i></p>
+  <h1>🛠️ DevOps Cheat Sheet</h1>
+  <p><i>Actionable DevOps best practices extracted from Stan's Robot Shop</i></p>
 </div>
 
 ---
 
-This guide serves as an index and companion to the full **[DEVOPS_ROADMAP.md](DEVOPS_ROADMAP.md)**. 
-We've structured the learning path around one core question at each step: **"What does this tool fix that the previous one couldn't?"**
+This guide highlights the core DevOps practices implemented in this project. While the full **[DEVOPS_ROADMAP.md](DEVOPS_ROADMAP.md)** provides deep dives into *why* these tools are used, this document shows you *how* we apply them.
 
-## 🗺️ The Learning Path
+## 🐳 1. Dockerfile Design Practices
 
-### 🏗️ Fundamentals
-- **[1. Architecture Design](DEVOPS_ROADMAP.md):** Understand the polyglot microservice structure.
-- **[2. Dockerfile Mastery](DEVOPS_ROADMAP.md):** Best practices, multi-stage builds, and minimizing image bloat.
+### Cache Optimization
+Every instruction in a Dockerfile creates a layer, and Docker caches these layers top-down. 
+> [!IMPORTANT]  
+> **Rule:** Always copy dependency manifests (like `package.json` or `pom.xml`) and install dependencies **before** copying your source code.
 
-### 🔄 CI/CD & Registry
-- **[3. Continuous Integration](DEVOPS_ROADMAP.md):** How GitHub Actions pipelines work (and diagnosing broken workflows).
-- **[4. Container Registry](DEVOPS_ROADMAP.md):** Image identity, tagging strategies, and deployment tracking.
+**Example from `cart/Dockerfile`:**
+```dockerfile
+COPY package.json /opt/server/     # 1. Manifest only
+RUN npm install                    # 2. Cached unless package.json changes
+COPY server.js /opt/server/        # 3. Source last (changes frequently)
+```
 
-### 🐳 Container Orchestration
-- **[5. Plain Docker](DEVOPS_ROADMAP.md):** Deploying by hand—and understanding its limitations.
-- **[6. Docker Compose](DEVOPS_ROADMAP.md):** Local environment orchestration.
-- **[7. Kubernetes (K8s)](DEVOPS_ROADMAP.md):** The industry standard for container orchestration and what it costs you in complexity.
-- **[8. Cloud Environments](DEVOPS_ROADMAP.md):** Deploying to AWS EKS, OpenShift, AKS, and GKE.
+### Multi-Stage Builds
+Don't ship your build tools in your final image!
+**Example from `shipping/Dockerfile`:**
+We use a heavy `maven` image to compile the Java code, but the final runtime image is a tiny `eclipse-temurin:25-jre-alpine`. This drops over 500MB of unnecessary bloat and reduces the attack surface.
 
-### 📊 Observability & Day 2 Ops
-- **[9. Observability](DEVOPS_ROADMAP.md):** Metrics with Prometheus + Grafana, and Log Aggregation with ELK.
-- **[10. Infrastructure as Code](DEVOPS_ROADMAP.md):** Provisioning with Terraform and configuration with Ansible.
-- **[11. GitOps](DEVOPS_ROADMAP.md):** Continuous Deployment using Argo CD.
+## 🔄 2. CI/CD Pipeline Practices
+
+### Path Filtering
+When working in a monorepo with multiple microservices, CI shouldn't build the `cart` service if only the `payment` code changed.
+**Example from `.github/workflows/cart.yaml`:**
+```yaml
+on:
+  push:
+    paths:
+      - 'cart/**'  # Only trigger on changes to the cart service
+```
+
+### Secure Secret Handling
+Never pass passwords or tokens via command line arguments (e.g., `docker login -p`), as they can be exposed in system process lists.
+> [!TIP]
+> **Best Practice:** Pipe secrets securely via standard input.
+```bash
+echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u ${{ secrets.USERNAME }} --password-stdin
+```
+
+## 📊 3. Observability & Reliability
+
+### Metrics Endpoints
+Modern microservices must expose their health and performance metrics to scrapers like Prometheus.
+- The `cart` and `payment` services expose a standard `/metrics` endpoint, allowing Prometheus to track "items in cart" and "purchases made."
+
+### Asynchronous Fault Tolerance
+Microservices should degrade gracefully. 
+- In this app, the `payment` service (Python) sends successful transactions to a RabbitMQ queue, which is then consumed by the `dispatch` service (Go). 
+- If `dispatch` crashes, the payment still goes through! The queue simply grows silently until `dispatch` is brought back online.
+
+## ☸️ 4. Orchestration Gotchas
+
+### Volume Persistence
+In plain `docker-compose.yaml`, the MongoDB and MySQL containers do not use named volumes. 
+> [!WARNING]
+> This means running `docker compose down` will permanently destroy your product catalog and user data. Always use volumes for stateful services in production!
+
+### Avoiding Outdated Resource Limits
+You might see hardcoded JVM heap flags (`-Xmn256m`, `-Xmx768m`) in older Java Dockerfiles. Modern JVMs (running in Kubernetes or Docker) are cgroup-aware and calculate heap sizes automatically based on the container's RAM limits. Avoid hardcoding these where possible!
 
 ---
-
-### 💡 Ready to start? 
-**Head over to the [DEVOPS_ROADMAP.md](DEVOPS_ROADMAP.md) to begin your journey!**
+💡 **Want to learn how to build this from scratch?** Check out the full 12-part [**DevOps Roadmap**](DEVOPS_ROADMAP.md).
