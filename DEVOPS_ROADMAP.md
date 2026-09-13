@@ -270,129 +270,16 @@ All eight use the same two secrets: `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (
 
 **The trigger difference is still the sharpest thing in this table.** Five files scope to a **directory** (`cart/**`, `user/**`, `web/**`); three still scope to a **file extension** (`**.go`, `**.py`, `**.java`). Part 3.3 has the diagnosis, and 3.3.1 has a live demonstration of it going wrong.
 
-## 3.3 Solved: the four broken workflows
+## 3.3 CI/CD Best Practices Checklist
 
-`dispatch.yaml`, `payment.yaml`, `shipping.yaml` and `user.yaml` shipped broken. All four have since been fixed and all four now push images. The diagnosis below is kept as reference — if you want to redo it as an exercise, read the four files at commit `a577429` or earlier first and write your own list before opening it.
+Every workflow must be actively maintained to prevent silent failures. Follow these practices:
 
-<details>
-<summary><b>Answer key — the original defects</b></summary>
-
-**All four share these:**
-- `runs-on: [self-hosted]` with no registered runner → the job queues forever and times out after 24 hours. (The inline comment says to use a standard runner — the code does the opposite.)
-- **No `defaults.run.working-directory`**, so every command runs at the repo root. There's no Dockerfile there, so `docker build .` fails with "failed to read dockerfile".
-- The job key is `payment:` in all four — copy-paste leftover; only the display `name:` was changed.
-- `actions/checkout@v2` is deprecated, and `fetch-depth: 0` clones full history for no reason.
-- `docker login -p` puts the token in the process list. Use `--password-stdin`.
-- **`${name}`** is bash syntax, not Actions syntax (`${{ }}`), and is defined nowhere. It expands to empty → `docker tag payment /payment:latest` → "invalid reference format".
-- No `permissions:` block; actions aren't SHA-pinned; `pull_request` builds and pushes images from unmerged code.
-
-**dispatch.yaml**
-- `curl -sL <go tarball> |` pipes the archive into `export PATH=...`. `export` reads no stdin, so Go is never installed and the download is discarded — **and the step exits 0, so it passes silently.**
-- The step is unnecessary anyway: the Dockerfile already uses `FROM golang:1.23`.
-- It builds `-t payment` — the wrong service.
-- `docker tag dispatch ...` names an image that was never built → "No such image".
-
-**payment.yaml**
-- `'**.py'` also matches `load-gen/robot-shop.py`, so editing the load generator triggers a payment build.
-- `sudo apt-get install python3` with no `update` and no `-y` → prompts, then aborts. Unnecessary (`FROM python:3.9`).
-
-**shipping.yaml**
-- `name: Dispatch` on line 1 — the Actions UI shows two workflows called "Dispatch".
-- The step is called "Go install" for a Java service.
-- `sudo apt-get install openjdk 17 | java -version` — `openjdk` isn't a package (it's `openjdk-17-jdk`), `17` is a stray argument, and the trailing `|` pipes apt's output into `java -version`. **The step's exit code comes from `java -version`, so a failed install reports success.**
-
-**user.yaml**
-- `'**.js'` matches `cart/server.js`, `catalogue/server.js`, `mongo/catalogue.js`, `mongo/users.js` and `web/static/js/*.js` — editing cart, catalogue, seed data or the frontend all trigger a `user` build.
-- `npm install` at the repo root, where there's no `package.json` → ENOENT. Unnecessary.
-- `docker user ${name}/user:latest` should be `docker push` — "'user' is not a docker command".
-</details>
-
-The two silent-pass bugs (`dispatch`'s dangling pipe, `shipping`'s piped apt) are the ones worth remembering. A red pipeline tells you something. A **green pipeline that did nothing** is far more dangerous.
-
-**What the fixes came down to.** Almost all of it was deletion, not addition: drop the hand-rolled toolchain install (the Dockerfile's `FROM` already provides Go, Python, Java and Node), set `runs-on: ubuntu-latest`, add `defaults.run.working-directory`, and replace the mangled tag/push lines with a single `docker push <user>/<svc>:${{ github.run_number }}`. The lesson generalises: **most broken CI is a step that shouldn't exist.**
-
-**What survived the fixes** — still true today, worth fixing:
-- `dispatch.yaml`'s job key is still `payment:`. Harmless, but the Actions UI lists the check as "payment" for a dispatch build.
-- `payment.yaml` (`**.py`), `dispatch.yaml` (`**.go`) and `shipping.yaml` (`**.java`) still trigger on file extension. `**.py` still matches `load-gen/robot-shop.py`.
-- Seven of eight still use `docker login -p`, which prints `WARNING! Using --password via the CLI is insecure` and writes the token unencrypted to `~/.docker/config.json` on the runner.
-- Still no `permissions:` block anywhere, no SHA-pinned actions, and six of eight still build **and push** on `pull_request` — meaning unmerged code publishes images.
-
-### 3.3.1 The path-filter bug, demonstrated live
-
-This one happened for real and is the best single argument for directory-scoped triggers.
-
-`cart`, `catalogue` and `user` were moved to `node:20-alpine` in one commit. Cart and catalogue rebuilt and pushed. **`user` did not.** No error, no failed run, no notification — the workflow simply never fired.
-
-The reason: at that moment `user.yaml` still filtered on `'**.js'`. The commit changed `user/Dockerfile`, which is not a `.js` file. The filter that was too *broad* in one direction (it matched `cart/server.js`, `mongo/users.js`, `web/static/js/*.js` — none of which belong to the user service) was simultaneously too *narrow* in the other: it didn't match the service's own Dockerfile.
-
-Changing it to `'user/**'` fixed both directions at once, and the next commit built `user:3`.
-
-**The habit to build:** after a push, check that the workflows you *expected* to run actually ran. A workflow that doesn't trigger produces no signal at all — it looks identical to a repo where nothing needed doing.
-
-## 3.4 Audit: what's still wrong across all eight
-
-Every workflow builds and pushes now. None of them is good yet:
-
-- **`docker login -p` in seven of eight.** Only `cart.yaml` pipes the token via `--password-stdin`. The `-p` form leaks the token into the process list and writes it unencrypted to the runner's `~/.docker/config.json`. On an ephemeral runner the blast radius is small, but the habit is wrong.
-  > Note the trap here: `--password-stdin` is not a flag you append to `-p`. They're mutually exclusive, and passing both fails with `conflicting options: cannot specify both --password and --password-stdin`. You pipe the token in instead: `echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u ... --password-stdin`.
-- **No `permissions:` block anywhere.** Each job gets the repo-default `GITHUB_TOKEN` scope, which is far more than "build a container" needs. Add `permissions: {contents: read}`.
-- **Actions aren't SHA-pinned.** `actions/checkout@v7` is a moving tag; a compromised release moves with it. Pin to a commit SHA for anything that touches secrets.
-- **Six of eight push on `pull_request`.** Only `web.yml` guards it — `if: github.event_name == 'push'` on both the login and push steps. Everywhere else, opening a PR from a fork publishes an image built from unreviewed code using your Docker Hub token. This is the most serious item in this list.
-- **`rating.yaml` pushes to repo `rating`** while the service is called `ratings` everywhere else — in `docker-compose.yaml`, in the Helm charts, in the nginx routing table. A one-character naming drift that every consumer has to know about.
-- **No build caching**, so every run rebuilds every layer from scratch. Most painful on `shipping`, which re-resolves Maven dependencies each time (see Part 2.2).
-
-## 3.5 Solved: the two missing pipelines
-
-`ratings` and `web` had none. Both now exist — [rating.yaml](.github/workflows/rating.yaml) and [web.yml](.github/workflows/web.yml) — and both push.
-
-`web.yml` is the best of the eight, and it's the only one that gets the `pull_request` question right:
-
-```yaml
-      - name: Docker Login
-        if: github.event_name == 'push'        # <-- PRs build, but don't publish
-        run: docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" -p "${{ secrets.DOCKERHUB_TOKEN }}"
-
-      - name: Docker Push
-        if: github.event_name == 'push'
-        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/web:${{ github.run_number }}
-```
-
-That's exactly the right shape: a PR still proves the image *builds*, which is the useful signal, without publishing anything or exposing the registry token to unreviewed code. Copy this guard into the other seven.
-
-`rating.yaml` is narrower than the rest — it triggers on `ratings/html/**` and `ratings/Dockerfile` rather than `ratings/**`. That's deliberate precision, though it does mean a change to `ratings/status.conf` (which the Dockerfile copies in) won't trigger a build. Compare with 3.3.1: the same class of bug, waiting to happen.
-
-Here's the target shape, with everything 3.4 lists still missing folded in:
-
-```yaml
-name: Ratings
-on:
-  push:
-    branches: [master]
-    paths: ['ratings/**', '.github/workflows/rating.yaml']
-  pull_request:
-    branches: [master]
-    paths: ['ratings/**', '.github/workflows/rating.yaml']
-permissions:
-  contents: read                                # least privilege
-jobs:
-  ratings:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ratings
-    steps:
-      - uses: actions/checkout@v4
-      - name: Docker login
-        if: github.event_name == 'push'
-        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
-      - name: Build
-        run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/ratings:${{ github.sha }} .
-      - name: Push
-        if: github.event_name == 'push'
-        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/ratings:${{ github.sha }}
-```
-
-Note the tag: `github.sha` is immutable and traceable to an exact commit. `github.run_number` — what all eight workflows currently use — is traceable to a *run*, which is nearly as good but has a catch you'll meet in Part 4.
+- ❌ **Don't use `docker login -p`:** It writes tokens unencrypted and exposes them to system process lists.
+- ✅ **Do use `--password-stdin`:** Securely pipe credentials: `echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u ... --password-stdin`
+- ✅ **Pin GitHub Actions:** Use specific SHA hashes instead of `@v7` tags to prevent supply-chain attacks.
+- ✅ **Scope triggers to paths, not extensions:** Trigger builds with `paths: ['cart/**']` rather than `'**.js'`, which accidentally triggers backend builds when frontend files change.
+- ✅ **Drop default permissions:** Always explicitly set `permissions: {contents: read}` to prevent excess token privileges.
+- 🚨 **Never push images on `pull_request`:** Restrict `docker push` only to `push` events on the main branch, otherwise unreviewed PR code will overwrite your registry images!
 
 ## 3.6 Then make the CI genuinely good
 
