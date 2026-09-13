@@ -96,8 +96,7 @@ graph TD
 | **💳 Payment** | Python (Flask) | RabbitMQ (Pub) | `8080` |
 | **📨 Dispatch** | Go | RabbitMQ (Sub) | — |
 
-<details>
-<summary><b>📁 Project Structure</b></summary>
+### 📁 Project Structure
 
 ```text
 .
@@ -124,10 +123,8 @@ graph TD
 ├── DEVOPS_ROADMAP.md            12-part learning path  ← start here
 └── PRACTICE_GUIDE.md            Index into the roadmap
 ```
-</details>
 
-<details>
-<summary><b>🐳 Where the images come from</b></summary>
+### 🐳 Where the images come from
 
 Twelve containers run in this stack. Conflating where their images come from is a common source of errors (like an empty product catalogue).
 
@@ -136,17 +133,14 @@ Twelve containers run in this stack. Conflating where their images come from is 
 3. **Open source, unmodified**: `redis` and `rabbitmq`.
 4. **Base images**: The `FROM` lines in the Dockerfiles, used during CI build.
 
-</details>
 
-<details>
-<summary><b>🔄 CI/CD, Observability & Load Gen</b></summary>
+### 🔄 CI/CD, Observability & Load Gen
 
 - **CI Pipelines:** There are 8 GitHub Action workflows in `.github/workflows/`, one per service. They build the image and push it to your Docker Hub on changes. 
 - **Metrics:** `cart` and `payment` expose `/metrics` for Prometheus.
 - **Logs:** `fluentd/` ships log-forwarding configs for both Compose and Kubernetes.
 - **Load Generation:** A Locust load generator is included in `load-gen/`. You can run it via `docker compose -f docker-compose.yaml -f docker-compose-load.yaml up -d`.
 
-</details>
 
 ## 🛠️ Quick Start
 
