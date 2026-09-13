@@ -4,14 +4,15 @@ This guide has been merged into **[DEVOPS_ROADMAP.md](DEVOPS_ROADMAP.md)** — a
 
 1. How this project is designed
 2. Dockerfile design and best practices
-3. How CI works (including the broken-workflow debugging exercise)
-4. Deploy with plain Docker — and what it doesn't solve
-5. Docker Compose — and what it doesn't solve
-6. Kubernetes — and what it costs you
-7. Different environments: AWS EKS, OpenShift
-8. Observability: Prometheus + Grafana, and ELK for logs
-9. Provisioning: Terraform and Ansible
-10. GitOps with Argo CD
-11. Suggested order
+3. How CI works (including the solved broken-workflow diagnosis)
+4. The registry: image identity and tags
+5. Deploy with plain Docker — and what it doesn't solve
+6. Docker Compose — and what it doesn't solve
+7. Kubernetes — and what it costs you
+8. Different environments: AWS EKS, OpenShift
+9. Observability: Prometheus + Grafana, and ELK for logs
+10. Provisioning: Terraform and Ansible
+11. GitOps with Argo CD
+12. Suggested order
 
 See [DEVOPS_ROADMAP.md](DEVOPS_ROADMAP.md).

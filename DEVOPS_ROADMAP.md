@@ -2,11 +2,11 @@
 
 A single progression built around one question at each step: **what does this tool fix that the previous one couldn't?**
 
-Design of the app → Dockerfiles → CI → plain Docker → Compose → Kubernetes → EKS/OpenShift → observability → Terraform/Ansible → Argo CD.
+Design of the app → Dockerfiles → CI → the registry → plain Docker → Compose → Kubernetes → EKS/OpenShift → observability → Terraform/Ansible → Argo CD.
 
 **Your setup (assumed throughout):** Windows 11 + Docker Desktop (WSL2 backend), **Oracle Linux on WSL** as the Linux workstation, and an AWS account. Commands marked `powershell` run on Windows; commands marked `bash` run in your WSL Oracle Linux shell — every `.sh` file in this repo is POSIX shell and belongs there. Docker Desktop shares its engine with WSL, so `docker` works in both (enable it under Settings → Resources → WSL Integration).
 
-> **Note:** the CI workflows for `dispatch`, `payment`, `shipping` and `user` are broken on purpose and stay that way — they're the debugging exercise in Part 3.3.
+> **Status:** the CI workflows that were originally broken (`dispatch`, `payment`, `shipping`, `user`) have all been **fixed**, and the two that were missing (`ratings`, `web`) have been **written**. All eight now build and push to the `naveenreddy9` Docker Hub namespace. Parts 3.3–3.5 keep the original diagnosis as the reference material — they're written as solved exercises, not pending ones.
 
 ---
 
@@ -48,7 +48,7 @@ catalogue  user        cart      shipping   ratings    payment
 | payment | RabbitMQ | **soft** — payment still succeeds, message queues up |
 | dispatch | RabbitMQ | silent — it simply stops consuming |
 
-That payment/dispatch split is the most instructive pair in the app: it's asynchronous, so a RabbitMQ outage produces no user-visible error at all — only a growing queue and a silent consumer. Learning to notice that kind of failure is Part 8.
+That payment/dispatch split is the most instructive pair in the app: it's asynchronous, so a RabbitMQ outage produces no user-visible error at all — only a growing queue and a silent consumer. Learning to notice that kind of failure is Part 9.
 
 ## 1.3 The routing table
 
@@ -71,7 +71,7 @@ The upstream README says it plainly: error handling is patchy and there's no sec
 - **No volumes anywhere in `docker-compose.yaml`.** Every database writes to the container's writable layer, so `docker compose down` destroys the data.
 - **Only the app services define healthchecks.** MongoDB, MySQL, Redis, RabbitMQ and `dispatch` have none, so they never report `healthy`.
 - **Plaintext passwords.** `user/server.js:129` compares with `==`, and `mongo/users.js` seeds users like `user/password` and `stan/bigbrain`. MySQL ships `MYSQL_PASSWORD=secret`, RabbitMQ uses `guest/guest`.
-- **Every base image is end-of-life:** `node:14`, `php:7.4`, `debian:10`, `openjdk:8`, `nginx:1.21.6`.
+- **Several base images are end-of-life:** `php:7.4` (ratings), `python:3.9` (payment), `nginx:1.21.6` (web), and `maven:3.6.3-jdk-8` in shipping's build stage. The Node services and shipping's *runtime* stage have since been moved to supported versions — see Part 2.4.
 - **`.gitignore` is five lines** and excludes none of `.env`, `*.pem`, `*.key`, or `kubeconfig` — while `EKS/04-alb-configuration.md` tells you to download `iam_policy.json` straight into the repo.
 
 Keep a running list as you go. The habit of recording *what was wrong and why* is most of what separates someone who "did a tutorial" from someone who can audit a system.
@@ -95,7 +95,7 @@ Consequence, and the single most important design rule: **copy your dependency m
 ### `cart/Dockerfile` — cache ordering done right
 
 ```dockerfile
-FROM node:14
+FROM node:20-alpine
 EXPOSE 8080
 WORKDIR /opt/server
 COPY package.json /opt/server/     # 1. manifest only
@@ -105,59 +105,63 @@ CMD ["node", "server.js"]
 ```
 Editing `server.js` re-runs only the last two steps; `npm install` stays cached. This is the pattern to internalise.
 
-**Still wrong with it:** `node:14` is EOL; `npm install` should be `npm ci` (reproducible, uses the lockfile); it runs as root; there's no `HEALTHCHECK` and no `.dockerignore`.
+The base was originally `node:14` — EOL since April 2023 — and is now `node:20-alpine`. That change is written up with measurements in Part 2.4; `catalogue` and `user` got the same treatment.
 
-### `shipping/Dockerfile` — multi-stage done right
+**Still wrong with it:** `npm install` should be `npm ci` (reproducible, uses the lockfile); it runs as root; there's no `HEALTHCHECK` and no `.dockerignore`. And note what alpine removes — there's no `curl` in the image any more, while `docker-compose.yaml`'s healthcheck for this service still shells out to `curl`. Either add `RUN apk add --no-cache curl` or switch the healthcheck to `wget -q --spider` (busybox `wget` *is* present).
+
+### `shipping/Dockerfile` — multi-stage, with the cache trick undone
 
 ```dockerfile
-FROM debian:10 AS build
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates-java maven && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*     # cleanup in the SAME layer
+FROM  maven:3.6.3-jdk-8 AS build
 WORKDIR /opt/shipping
 COPY pom.xml /opt/shipping/
-RUN mvn dependency:resolve                            # dependency layer, cached
 COPY src /opt/shipping/src/
 RUN mvn package
 
-FROM openjdk:8-jdk                                    # runtime stage
+FROM eclipse-temurin:25-jre-alpine                    # runtime stage
+EXPOSE 8080
+WORKDIR /opt/shipping
+ENV CART_ENDPOINT=cart:8080
+ENV DB_HOST=mysql
 COPY --from=build /opt/shipping/target/shipping-1.0.jar shipping.jar
 CMD [ "java", "-Xmn256m", "-Xmx768m", "-jar", "shipping.jar" ]
 ```
-Three things worth copying: the build tooling (Maven, ~500MB) never reaches the final image; `apt-get clean` runs *in the same `RUN`* as the install, because cleaning in a later layer wouldn't shrink anything; and the same manifest-before-source trick appears as `pom.xml` before `src/`.
+The multi-stage split is the thing to copy: Maven and the whole JDK (~500MB of build tooling) never reach the final image, which is a JRE on alpine. Using `maven:3.6.3-jdk-8` as the build stage also replaced a hand-rolled `apt-get install maven` — letting an official image supply the toolchain is almost always better than installing it yourself.
 
-**Still wrong with it:** the runtime uses the full **JDK** where a **JRE** would do, and `openjdk:8` is ancient. The fixed heap flags predate JVM container awareness — modern JVMs read cgroup limits automatically.
-
-### `dispatch/Dockerfile` — the one to fix
+**The regression worth spotting:** `COPY pom.xml` sits immediately above `COPY src`, with **no `RUN mvn dependency:resolve` between them**. Splitting the copies only helps if something *consumes* the manifest before the source arrives. As written, editing any `.java` file invalidates the `COPY src` layer, and `mvn package` re-downloads every dependency from scratch. The fix is one line:
 
 ```dockerfile
-FROM golang:1.23
+COPY pom.xml /opt/shipping/
+RUN mvn dependency:go-offline        # <-- dependency layer, cached
+COPY src /opt/shipping/src/
+RUN mvn package -o
+```
+
+**Also still wrong:** the build stage is JDK 8 while the runtime is JRE 25 — compiling against an ancient JDK to run on a modern JVM is backwards, and `maven:3.6.3-jdk-8` is long EOL. The fixed heap flags (`-Xmn256m -Xmx768m`) predate JVM container awareness; modern JVMs read cgroup limits automatically, so these override something the JVM would get right on its own.
+
+### `dispatch/Dockerfile` — the refactor, done
+
+This was the worst file in the repo: single-stage `golang:1.23`, shipping the entire Go toolchain to run a ~10MB binary, with `go mod init` generating the module at build time and a shell-form `CMD`. It now reads:
+
+```dockerfile
+FROM golang:1.24 AS builder
 WORKDIR /go/src/app
 COPY *.go .
-RUN go mod init dispatch && go get     # generates the module AT BUILD TIME
-RUN go install
-CMD dispatch
-```
-Everything about this is worth discussing:
-- **No second stage**, so the final image carries the entire Go toolchain — hundreds of MB to ship a binary that could be ~10MB.
-- **`go mod init` at build time** means there's no committed `go.mod`/`go.sum`, so dependency versions are resolved fresh on every build. Builds aren't reproducible, and there's nothing to audit.
-- **`CMD dispatch`** is shell form, relying on `PATH`; exec form (`CMD ["dispatch"]`) is preferred so the process gets PID 1 and receives signals properly.
+RUN go mod init dispatch                              # creates go.mod
+RUN go mod tidy                                       # downloads deps, creates go.sum
+RUN CGO_ENABLED=0 go build -o dispatch .              # static binary, no runtime libs
 
-The refactor:
-```dockerfile
-FROM golang:1.23 AS build
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -o /out/dispatch .
-
-FROM gcr.io/distroless/static-debian12
-COPY --from=build /out/dispatch /dispatch
-USER nonroot:nonroot
-ENTRYPOINT ["/dispatch"]
+FROM alpine:latest
+WORKDIR /app
+COPY --from=builder go/src/app/dispatch .
+CMD ["./dispatch"]
 ```
-Measure before and after with `docker images` — this is usually the most satisfying single change in the whole repo.
+Three of the four original problems are gone: there's a second stage, `CGO_ENABLED=0` produces a static binary that needs no runtime libraries, and `CMD` is exec form so the process gets PID 1 and receives signals.
+
+**What's still open:**
+- **`go mod init` / `go mod tidy` still run at build time**, so there's still no committed `go.mod`/`go.sum`. Dependency versions are resolved fresh on every build — not reproducible, and nothing to audit. Running `go mod init && go mod tidy` locally and committing both files is the real fix.
+- **`FROM alpine:latest`** is unpinned, and a static binary doesn't need alpine at all. `gcr.io/distroless/static-debian12` or even `FROM scratch` would work and cut the last few MB.
+- **No `USER`** — it still runs as root.
 
 ### `ratings/Dockerfile` — the security exhibit
 
@@ -190,26 +194,44 @@ Derived from the six files above — every item has a real example in this repo:
 
 | Practice | Where this repo gets it right / wrong |
 |---|---|
-| Manifest before source, for cache | cart ✅, shipping ✅ |
-| Multi-stage for compiled languages | shipping ✅, dispatch ❌ |
-| Clean package caches in the same `RUN` | shipping ✅ |
-| Pin every base image, including `COPY --from` | ratings ❌ (`composer:latest`) |
-| Commit lockfiles, don't generate deps at build | dispatch ❌ (`go mod init` at build) |
+| Manifest before source, for cache | cart ✅, catalogue ✅, user ✅; shipping ❌ (no dependency-resolve step between the copies) |
+| Multi-stage for compiled languages | shipping ✅, dispatch ✅ |
+| Let an official image supply the toolchain | shipping ✅ (`maven:3.6.3-jdk-8` build stage) |
+| Pin every base image, including `COPY --from` | ratings ❌ (`composer:latest`), dispatch ❌ (`alpine:latest`) |
+| Commit lockfiles, don't generate deps at build | dispatch ❌ (`go mod init`/`go mod tidy` at build) |
 | Run as a non-root user | all ❌; payment explicitly `USER root` |
-| Exec-form `CMD`/`ENTRYPOINT` | cart ✅, dispatch ❌ |
-| Runtime config via env vars, not baked in | web ✅ |
+| Exec-form `CMD`/`ENTRYPOINT` | cart ✅, dispatch ✅, web ✅ |
+| Runtime config via env vars, not baked in | web ✅, shipping ✅ |
 | Least-privilege file permissions | ratings ❌ (`chmod 777`) |
-| Keep base images in support | all ❌ (node:14, php:7.4, debian:10, openjdk:8) |
+| Keep base images in support | cart/catalogue/user ✅ (node:20); shipping runtime ✅ (temurin:25) — shipping *build* ❌ (jdk-8), ratings ❌ (php:7.4), payment ❌ (python:3.9), web ❌ (nginx:1.21.6) |
+| Small runtime base | cart/catalogue/user ✅, shipping ✅, dispatch ✅ (alpine) |
 | `.dockerignore` to shrink build context | none have one ❌ |
 
-## 2.4 Exercises
+## 2.4 Exercises — and what came of them
 
-1. Refactor `dispatch` to multi-stage (above) and measure the size drop.
+**1. Refactor `dispatch` to multi-stage. ✅ Done.** Covered in the case study above. Three of four problems fixed; the uncommitted `go.mod` is still open.
+
+**3. Bump `cart` off `node:14`. ✅ Done — and further than asked.** `cart`, `catalogue` and `user` all went to `node:20-alpine` in one commit. The measured result:
+
+| Image | Before | After | Change |
+|---|---|---|---|
+| `cart` | 424 MB (`node:20`) | **65 MB** | −85% |
+| `catalogue` | 420 MB (`node:20`) | **61 MB** | −85% |
+| `user` | never built (`node:14`, CI broken) | **62 MB** | — |
+
+Two things worth taking from that:
+
+- **The saving is the base, not your code.** These services are a single `server.js` plus `node_modules`. Nearly everything in the original 420MB was Debian userland and build toolchain that the application never touches at runtime.
+- **The risk that didn't materialise.** All three services depend on `@instana/collector`, which ships native modules. Alpine uses musl rather than glibc, so a missing musl prebuild would mean compiling from source — and alpine has no compiler. It built cleanly on the first CI run. The reason it's safe is that those native modules are declared as *optional* dependencies, so npm continues past a failed build rather than aborting. Worth knowing *why* it worked, not just that it did.
+- **What it quietly broke.** Alpine has no `curl`, and `docker-compose.yaml`'s healthchecks for all three services call `curl`. Nobody noticed because the local run uses `docker-compose.local.yaml`, which declares no healthchecks (Part 6.2).
+
+**Still to do:**
+
 2. Add a `.dockerignore` to a Node service; watch the "sending build context" number fall.
-3. Bump `cart` from `node:14` to `node:20`, rebuild, and see what breaks.
-4. Pin `COPY --from=composer` to a real version in `ratings`.
+4. Pin `COPY --from=composer` to a real version in `ratings` — and pin `alpine:latest` in `dispatch` while you're there.
 5. Add a non-root `USER` to `payment` and fix whatever permissions break.
-6. Scan before and after: `docker scout cves <image>` or `docker run --rm aquasec/trivy image <image>`. These EOL bases produce a genuinely alarming report.
+6. Add the missing `RUN mvn dependency:go-offline` to `shipping` and time a rebuild after a one-character source edit, before and after.
+7. Scan before and after: `docker scout cves <image>` or `docker run --rm aquasec/trivy image <image>`. Run it against `cart:14` and `cart:15` — both are still in your registry, so you can diff a Debian base against an alpine one directly.
 
 ---
 
@@ -230,28 +252,29 @@ The one mental model that matters: **the exit code of the last command in a `run
 
 ## 3.2 How this repo wires it up
 
-Eight services, six workflows, one file each:
+Eight services, eight workflows, one file each. All of them now build and push:
 
-| Workflow | Triggered by | Tag strategy | State |
+| Workflow | Triggered by | Pushes | Login style |
 |---|---|---|---|
-| `cart.yaml` | `cart/**` | `:latest` | reference version — but see 3.4 |
-| `catalogue.yaml` | `catalogue/**` | `:${{ github.run_number }}` | reference version |
-| `dispatch.yaml` | `**.go` | broken | **exercise** |
-| `payment.yaml` | `**.py` | broken | **exercise** |
-| `shipping.yaml` | `**.java` | broken | **exercise** |
-| `user.yaml` | `**.js` | broken | **exercise** |
-| `ratings`, `web` | — | — | **don't exist** |
+| `cart.yaml` | `cart/**` | `naveenreddy9/cart:<run_number>` | `--password-stdin` ✅ |
+| `catalogue.yaml` | `catalogue/**` | `naveenreddy9/catalogue:<run_number>` | `-p` ❌ |
+| `user.yaml` | `user/**` | `naveenreddy9/user:<run_number>` | `-p` ❌ |
+| `web.yml` | `web/**` | `naveenreddy9/web:<run_number>` | `-p` ❌ |
+| `rating.yaml` | `ratings/html/**`, `ratings/Dockerfile` | `naveenreddy9/rating:<run_number>` | `-p` ❌ |
+| `dispatch.yaml` | `**.go`, `dispatch/**` | `naveenreddy9/dispatch:<run_number>` | `-p` ❌ |
+| `payment.yaml` | `**.py` | `naveenreddy9/payment:<run_number>` | `-p` ❌ |
+| `shipping.yaml` | `**.java`, `shipping/Dockerfile` | `naveenreddy9/shipping:<run_number>` | `-p` ❌ |
 
-All six use the same two secrets: `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (set under Settings → Secrets and variables → Actions).
+All eight use the same two secrets: `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (set under Settings → Secrets and variables → Actions), and all eight use `actions/checkout@v7`.
 
-Notice the trigger difference already: the two working files scope to a **directory** (`cart/**`), while the four broken ones scope to a **file extension** (`**.js`). Part 3.3 shows why that matters.
+**The trigger difference is still the sharpest thing in this table.** Five files scope to a **directory** (`cart/**`, `user/**`, `web/**`); three still scope to a **file extension** (`**.go`, `**.py`, `**.java`). Part 3.3 has the diagnosis, and 3.3.1 has a live demonstration of it going wrong.
 
-## 3.3 Exercise: debug the four broken workflows
+## 3.3 Solved: the four broken workflows
 
-Read [dispatch.yaml](.github/workflows/dispatch.yaml), [payment.yaml](.github/workflows/payment.yaml), [shipping.yaml](.github/workflows/shipping.yaml) and [user.yaml](.github/workflows/user.yaml). For each, write down every reason it would fail — **before** opening the answer key. Don't run them, don't fix them.
+`dispatch.yaml`, `payment.yaml`, `shipping.yaml` and `user.yaml` shipped broken. All four have since been fixed and all four now push images. The diagnosis below is kept as reference — if you want to redo it as an exercise, read the four files at commit `a577429` or earlier first and write your own list before opening it.
 
 <details>
-<summary><b>Answer key — open after you've written your own list</b></summary>
+<summary><b>Answer key — the original defects</b></summary>
 
 **All four share these:**
 - `runs-on: [self-hosted]` with no registered runner → the job queues forever and times out after 24 hours. (The inline comment says to use a standard runner — the code does the opposite.)
@@ -285,30 +308,71 @@ Read [dispatch.yaml](.github/workflows/dispatch.yaml), [payment.yaml](.github/wo
 
 The two silent-pass bugs (`dispatch`'s dangling pipe, `shipping`'s piped apt) are the ones worth remembering. A red pipeline tells you something. A **green pipeline that did nothing** is far more dangerous.
 
-## 3.4 Audit the two "reference" workflows too
+**What the fixes came down to.** Almost all of it was deletion, not addition: drop the hand-rolled toolchain install (the Dockerfile's `FROM` already provides Go, Python, Java and Node), set `runs-on: ubuntu-latest`, add `defaults.run.working-directory`, and replace the mangled tag/push lines with a single `docker push <user>/<svc>:${{ github.run_number }}`. The lesson generalises: **most broken CI is a step that shouldn't exist.**
 
-They're closer, not correct:
+**What survived the fixes** — still true today, worth fixing:
+- `dispatch.yaml`'s job key is still `payment:`. Harmless, but the Actions UI lists the check as "payment" for a dispatch build.
+- `payment.yaml` (`**.py`), `dispatch.yaml` (`**.go`) and `shipping.yaml` (`**.java`) still trigger on file extension. `**.py` still matches `load-gen/robot-shop.py`.
+- Seven of eight still use `docker login -p`, which prints `WARNING! Using --password via the CLI is insecure` and writes the token unencrypted to `~/.docker/config.json` on the runner.
+- Still no `permissions:` block anywhere, no SHA-pinned actions, and six of eight still build **and push** on `pull_request` — meaning unmerged code publishes images.
 
-- **`cart.yaml` pins `actions/checkout@v7` — that tag doesn't exist** (checkout tops out around v5). The run fails immediately with "Unable to resolve action". It only *looks* fixed.
-- `cart.yaml` pushes `:latest` only, so there's no specific build to roll back to.
-- `catalogue.yaml` uses `docker login -p` and `actions/checkout@v2`, and still carries a comment saying the image is "tagged as 'payment'".
-- Neither sets `permissions:`, and both push on `pull_request`.
+### 3.3.1 The path-filter bug, demonstrated live
 
-## 3.5 Write the two missing pipelines
+This one happened for real and is the best single argument for directory-scoped triggers.
 
-`ratings` and `web` have none. Build them from scratch:
+`cart`, `catalogue` and `user` were moved to `node:20-alpine` in one commit. Cart and catalogue rebuilt and pushed. **`user` did not.** No error, no failed run, no notification — the workflow simply never fired.
+
+The reason: at that moment `user.yaml` still filtered on `'**.js'`. The commit changed `user/Dockerfile`, which is not a `.js` file. The filter that was too *broad* in one direction (it matched `cart/server.js`, `mongo/users.js`, `web/static/js/*.js` — none of which belong to the user service) was simultaneously too *narrow* in the other: it didn't match the service's own Dockerfile.
+
+Changing it to `'user/**'` fixed both directions at once, and the next commit built `user:3`.
+
+**The habit to build:** after a push, check that the workflows you *expected* to run actually ran. A workflow that doesn't trigger produces no signal at all — it looks identical to a repo where nothing needed doing.
+
+## 3.4 Audit: what's still wrong across all eight
+
+Every workflow builds and pushes now. None of them is good yet:
+
+- **`docker login -p` in seven of eight.** Only `cart.yaml` pipes the token via `--password-stdin`. The `-p` form leaks the token into the process list and writes it unencrypted to the runner's `~/.docker/config.json`. On an ephemeral runner the blast radius is small, but the habit is wrong.
+  > Note the trap here: `--password-stdin` is not a flag you append to `-p`. They're mutually exclusive, and passing both fails with `conflicting options: cannot specify both --password and --password-stdin`. You pipe the token in instead: `echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u ... --password-stdin`.
+- **No `permissions:` block anywhere.** Each job gets the repo-default `GITHUB_TOKEN` scope, which is far more than "build a container" needs. Add `permissions: {contents: read}`.
+- **Actions aren't SHA-pinned.** `actions/checkout@v7` is a moving tag; a compromised release moves with it. Pin to a commit SHA for anything that touches secrets.
+- **Six of eight push on `pull_request`.** Only `web.yml` guards it — `if: github.event_name == 'push'` on both the login and push steps. Everywhere else, opening a PR from a fork publishes an image built from unreviewed code using your Docker Hub token. This is the most serious item in this list.
+- **`rating.yaml` pushes to repo `rating`** while the service is called `ratings` everywhere else — in `docker-compose.yaml`, in the Helm charts, in the nginx routing table. A one-character naming drift that every consumer has to know about.
+- **No build caching**, so every run rebuilds every layer from scratch. Most painful on `shipping`, which re-resolves Maven dependencies each time (see Part 2.2).
+
+## 3.5 Solved: the two missing pipelines
+
+`ratings` and `web` had none. Both now exist — [rating.yaml](.github/workflows/rating.yaml) and [web.yml](.github/workflows/web.yml) — and both push.
+
+`web.yml` is the best of the eight, and it's the only one that gets the `pull_request` question right:
+
+```yaml
+      - name: Docker Login
+        if: github.event_name == 'push'        # <-- PRs build, but don't publish
+        run: docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" -p "${{ secrets.DOCKERHUB_TOKEN }}"
+
+      - name: Docker Push
+        if: github.event_name == 'push'
+        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/web:${{ github.run_number }}
+```
+
+That's exactly the right shape: a PR still proves the image *builds*, which is the useful signal, without publishing anything or exposing the registry token to unreviewed code. Copy this guard into the other seven.
+
+`rating.yaml` is narrower than the rest — it triggers on `ratings/html/**` and `ratings/Dockerfile` rather than `ratings/**`. That's deliberate precision, though it does mean a change to `ratings/status.conf` (which the Dockerfile copies in) won't trigger a build. Compare with 3.3.1: the same class of bug, waiting to happen.
+
+Here's the target shape, with everything 3.4 lists still missing folded in:
 
 ```yaml
 name: Ratings
 on:
   push:
     branches: [master]
-    paths: ['ratings/**', '.github/workflows/ratings.yaml']
+    paths: ['ratings/**', '.github/workflows/rating.yaml']
   pull_request:
     branches: [master]
-    paths: ['ratings/**', '.github/workflows/ratings.yaml']
+    paths: ['ratings/**', '.github/workflows/rating.yaml']
 permissions:
-  contents: read
+  contents: read                                # least privilege
 jobs:
   ratings:
     runs-on: ubuntu-latest
@@ -318,14 +382,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Docker login
+        if: github.event_name == 'push'
         run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
       - name: Build
-        run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/rs-ratings:${{ github.sha }} .
+        run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/ratings:${{ github.sha }} .
       - name: Push
-        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/rs-ratings:${{ github.sha }}
+        if: github.event_name == 'push'
+        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/ratings:${{ github.sha }}
 ```
 
-Note the tag: `github.sha` is immutable and traceable to an exact commit, which is what makes rollback meaningful later in Part 10.
+Note the tag: `github.sha` is immutable and traceable to an exact commit. `github.run_number` — what all eight workflows currently use — is traceable to a *run*, which is nearly as good but has a catch you'll meet in Part 4.
 
 ## 3.6 Then make the CI genuinely good
 
@@ -346,11 +412,178 @@ Note the tag: `github.sha` is immutable and traceable to an exact commit, which 
 
 ---
 
-# Part 4 — Deploy with plain Docker
+# Part 4 — The registry: image identity and tags
+
+CI produces images. Everything after this part consumes them. The joint between the two is the registry, and it's where a specific class of confusion lives — the kind that produces `manifest unknown` at 11pm, or worse, a deploy that silently runs last week's code.
+
+## 4.1 What your CI actually produced
+
+Eight repositories under the `naveenreddy9` namespace on Docker Hub, each tagged with the `github.run_number` of the run that built it:
+
+| Repo | Tags | Newest |
+|---|---|---|
+| `naveenreddy9/catalogue` | 6, 7, 8, 9, 10, 11 | **11** |
+| `naveenreddy9/cart` | 13, 14, 15 | **15** |
+| `naveenreddy9/dispatch` | 7 | **7** |
+| `naveenreddy9/shipping` | 5, 6 | **6** |
+| `naveenreddy9/user` | 3, 4 | **4** |
+| `naveenreddy9/rating` | 1 | **1** |
+| `naveenreddy9/payment` | 1 | **1** |
+| `naveenreddy9/web` | 1 | **1** |
+
+Stare at that column for a moment, because it contains the whole lesson of this part: **`github.run_number` is a per-workflow counter.** Cart's workflow has run 15 times, payment's once. There is no number that identifies "the current version of the app" — every service is on its own count, and they will never converge.
+
+That's not a bug in the workflows. It's what per-service pipelines *mean*: services release independently. But it breaks every tool that assumes a single version string, and you're about to meet two of them.
+
+**And a run number identifies a *run*, not code.** `user:3` and `user:4` are byte-identical images. Tag 4 exists because a commit added one line to `user.yaml` — and `user.yaml` lists itself in its own `paths:` filter, so editing the workflow rebuilt the service. Nothing about the application changed.
+
+That cuts both ways, and it's worth being clear about which you want:
+
+- **`github.run_number`** answers *"which pipeline run produced this?"* — good for finding logs, useless for knowing whether two tags contain the same code.
+- **`github.sha`** answers *"which commit is this?"* — two builds of the same commit get the same tag, and you can go straight from a running container to the exact source. It's the tag GitOps wants (Part 11).
+
+Neither is wrong. But if you find yourself asking "is `user:4` actually different from `user:3`?", the tag scheme has already failed you.
+
+## 4.2 `latest` is not "newest"
+
+This is the single most common misconception about Docker tags, so state it plainly:
+
+> **`latest` is an ordinary tag name with no special behaviour.** Docker never sorts tags, never compares dates, and never picks a highest version. Nothing about `latest` is automatic.
+
+Its one and only property is that it's the name Docker fills in when you *omit* a tag. `docker pull cart` is shorthand for `docker pull cart:latest` — that's the whole feature.
+
+So `naveenreddy9/cart:latest` exists only if something explicitly pushed a tag literally spelled `latest`. Your workflows push `:${{ github.run_number }}` and nothing else. Ask for `latest` and you get:
+
+```
+Error response from daemon: manifest unknown
+```
+
+Not "tag 15". Not the newest build. Nothing.
+
+**When `latest` does track the newest build**, it's because every run overwrites that name with a new image — the name moves because you keep reassigning it, not because Docker resolved anything. Which gives you the real trade-off:
+
+| | `:latest` | `:<run_number>` or `:<sha>` |
+|---|---|---|
+| Values to maintain | one, forever | one per service |
+| "Which commit is running?" | unanswerable | exact |
+| Rollback | impossible — the old image has no name | change one number |
+| Re-pull behaviour | `docker compose up` reuses a cached `latest` and silently runs stale code | a new tag always pulls |
+| Kubernetes | `imagePullPolicy: IfNotPresent` + `latest` = nodes disagree about what's running | deterministic |
+
+The usual answer is **both**: push `:<run_number>` *and* `:latest` from the same workflow, then choose per situation — `latest` for a throwaway local run, the specific tag for anything you need to reason about later. Two extra lines per workflow: a second `-t` on the build, a second `docker push`.
+
+## 4.3 The four categories of image in this stack
+
+Twelve containers run. They come from four genuinely different places, and conflating them is how people end up with an empty product catalogue and no idea why.
+
+**1. Yours — built by CI from source in this repo.** The eight above. You control the Dockerfile, the tag and the namespace.
+
+**2. Upstream `robotshop/*` — images with data baked in.** `robotshop/rs-mongodb:2.1.0` and `robotshop/rs-mysql-db:2.1.0`. These have Dockerfiles here ([mongo/](mongo/), [mysql/](mysql/)) but **no workflow builds them**, so they come from upstream.
+
+> **These are not interchangeable with `mongo:5` and `mysql:5.7`.** [mongo/Dockerfile](mongo/Dockerfile) copies in `catalogue.js` and `users.js`; [mysql/Dockerfile](mysql/Dockerfile) copies in `scripts/`. That's the seed data — the product catalogue, the demo users, the shipping tables. Swap in the plain official images and every container starts, nothing errors, and the shop is simply empty. A failure with no error message is the worst kind, and this one is two characters away at all times.
+
+**3. Genuinely open source, used unmodified.** `redis:6.2-alpine` and `rabbitmq:3.8-management-alpine`. No Dockerfile in this repo, no customisation, pulled straight from Docker Hub.
+
+**4. Base images — build time only.** The `FROM` lines: `node:20-alpine`, `golang:1.24`, `alpine:latest`, `python:3.9`, `php:7.4-apache`, `maven:3.6.3-jdk-8`, `eclipse-temurin:25-jre-alpine`, `nginx:1.21.6`, plus `composer` and `mongo:5`/`mysql:5.7`. These are consumed on the CI runner and never run as containers in the stack. [pullbaseimages.sh](pullbaseimages.sh) scrapes exactly this set.
+
+Categories 2 and 3 are the ones people merge by mistake. Both are "images someone else built", but one of them carries your data.
+
+## 4.4 Why one version value can't describe this stack
+
+Two files in this repo assume a uniform release tag, the way upstream ships `2.1.0` across every service. Both break the moment you build your own images.
+
+**[.env](.env) — used by [docker-compose.yaml](docker-compose.yaml):**
+```
+REPO=robotshop
+TAG=2.1.0
+```
+Every service resolves as `${REPO}/rs-<svc>:${TAG}`. One namespace, one tag, one `rs-` prefix. Your images are `naveenreddy9/<svc>:<n>` — different namespace, no prefix, and a different `<n>` per service. No pair of values works.
+
+**`EKS/helm/values.yaml` — as it was:**
+```yaml
+image:
+  repo: robotshop
+  version: latest
+```
+with every template doing `{{ .Values.image.repo }}/rs-<svc>:{{ .Values.image.version }}`.
+
+Changing `repo` to `naveenreddy9` and renaming seven templates got *most* of the way there and produced a chart where **10 of 12 pods would `ImagePullBackOff`**, in three distinct ways:
+
+- `version: latest` — doesn't exist for any of your images (4.2).
+- A single `version` can't be 15 for cart and 1 for payment at the same time (4.1).
+- `repo` is **global**, so pointing it at your namespace also redirected `mongodb`, `mysql` and `web` — which then resolved to `naveenreddy9/rs-mongodb`, `naveenreddy9/rs-mysql-db` and `naveenreddy9/rs-web`. None exist: the first two only live under `robotshop` (4.3), and yours is called `web`, not `rs-web`.
+
+**The fix is to stop assembling image names from shared parts.** Each workload carries its own complete reference:
+
+```yaml
+# EKS/helm/values.yaml
+image:
+  pullPolicy: IfNotPresent      # still global — this one genuinely is
+
+cart:
+  image: naveenreddy9/cart:15
+catalogue:
+  image: naveenreddy9/catalogue:11
+ratings:
+  image: naveenreddy9/rating:1  # note: repo is 'rating', service is 'ratings'
+mongodb:
+  image: robotshop/rs-mongodb:2.1.0   # stays upstream — seed data
+```
+```yaml
+# EKS/helm/templates/cart-deployment.yaml
+image: {{ .Values.cart.image }}
+```
+
+More verbose, and correct. It also removes the `rs-` prefix problem at the root: nothing is concatenated, so renaming one service can't break another. Override a single service without editing the file:
+
+```bash
+helm upgrade robot-shop EKS/helm --set cart.image=naveenreddy9/cart:16
+```
+
+**The general principle:** a shared value is only worth sharing if it's genuinely shared. `pullPolicy` is. `repo` and `version` looked like they were, right up until two services needed different ones.
+
+## 4.5 Reading your own registry
+
+You cannot deploy what you can't enumerate. Docker Hub's public API needs no auth for public repos:
+
+```bash
+# every repo in your namespace
+curl -s "https://hub.docker.com/v2/repositories/naveenreddy9/?page_size=100" \
+  | grep -o '"name":"[^"]*"'
+
+# every tag for one repo, newest first
+curl -s "https://hub.docker.com/v2/repositories/naveenreddy9/cart/tags?page_size=100" \
+  | grep -o '"name":"[^"]*"'
+```
+
+Locally:
+```powershell
+docker images                                   # what's cached here
+docker manifest inspect naveenreddy9/cart:15    # does this tag exist remotely, without pulling it
+docker history naveenreddy9/cart:15             # where the megabytes went, layer by layer
+```
+
+And before any Helm deploy, render the chart and read the image lines — this catches every mistake in 4.4 in about two seconds, for free, without a cluster:
+
+```bash
+helm template rs EKS/helm | grep "image:" | sort -u
+```
+
+## 4.6 Exercises
+
+1. **Add `:latest` alongside the run number** in one workflow. Two lines. Then deploy from `latest`, push a change, deploy again *without* changing any tag — and work out whether you got the new code. Then explain why `docker compose pull` was necessary.
+2. **Break it deliberately.** Set `CART_TAG=999` in `.env.local` and read the error. Then set it to `latest` and read that error. They're different failures; know both on sight.
+3. **Prove category 2 matters.** Point `mongodb` at plain `mongo:5` in `docker-compose.local.yaml` and load the site. Note that nothing errors — catalogue returns `[]` and the page is simply blank.
+4. **Switch to `github.sha`.** Retag one service by commit SHA instead of run number. What do you gain (a tag that identifies code, not a counter), and what do you lose (human-readable ordering — is `a3f9c2` newer than `7b1e44`)?
+5. **Find the drift.** `rating` vs `ratings` appears in the workflow, the compose file, the Helm values and the nginx routing table. Trace every place the name is written and decide where you'd fix it.
+
+---
+
+# Part 5 — Deploy with plain Docker
 
 Do this once, properly. Everything after it is a reaction to the problems you're about to feel.
 
-## 4.1 Run the whole stack by hand
+## 5.1 Run the whole stack by hand
 
 ```powershell
 docker network create robot-shop-manual
@@ -380,7 +613,7 @@ docker exec -it cart sh          # then: wget -qO- http://catalogue:8080/product
 docker stats                     # no limits set, so every container can eat the whole host
 ```
 
-## 4.2 The same thing on a normal Linux server
+## 5.2 The same thing on a normal Linux server
 
 This is also the answer to "can I run this on a plain server?" — yes, and the repo has **no script for it**; every `.sh` in the repo targets a cluster (Swarm/DC-OS/OpenShift) or runs inside a container. On a fresh Ubuntu/Oracle Linux host (an EC2 instance, or your WSL Oracle Linux):
 
@@ -396,7 +629,7 @@ Then run the twelve commands above. On EC2, open port 8080 in the security group
 
 Add `--restart unless-stopped` to every container, or nothing comes back after a reboot. Then reboot the box and see what happens — that lesson is worth the five minutes.
 
-## 4.3 What plain Docker doesn't solve
+## 5.3 What plain Docker doesn't solve
 
 Now the important part. Write your own list first, then compare:
 
@@ -415,9 +648,9 @@ Every one of these is what the next tool fixes.
 
 ---
 
-# Part 5 — Docker Compose
+# Part 6 — Docker Compose
 
-## 5.1 The same stack, declared once
+## 6.1 The same stack, declared once
 
 ```powershell
 cd D:\robot-shop-project\three-tier-architecture-robot-shop
@@ -426,7 +659,7 @@ docker compose up -d
 docker compose ps
 ```
 
-[docker-compose.yaml](docker-compose.yaml) is the file that replaces Part 4's twelve commands. Read it next to what you typed and match them up: `image:` ← the image argument, `environment:` ← every `-e`, `ports:` ← `-p`, `networks:` ← `--network`, `depends_on:` ← the order you started things in, `healthcheck:` ← the thing Docker had no idea about before.
+[docker-compose.yaml](docker-compose.yaml) is the file that replaces Part 5's twelve commands. Read it next to what you typed and match them up: `image:` ← the image argument, `environment:` ← every `-e`, `ports:` ← `-p`, `networks:` ← `--network`, `depends_on:` ← the order you started things in, `healthcheck:` ← the thing Docker had no idea about before.
 
 Compose fixes, directly:
 
@@ -437,7 +670,50 @@ Compose fixes, directly:
 - **Scaling** — `--scale` instead of inventing names.
 - **Config layering** — override files instead of retyping flags.
 
-## 5.2 Day-2 practice
+## 6.2 Running *your* images instead of upstream's
+
+[docker-compose.yaml](docker-compose.yaml) builds from source and names everything `${REPO}/rs-<svc>:${TAG}`. That's fine for upstream, whose services all ship under one release tag. It cannot express what your CI produces — Part 4.4 has the reasoning. [docker-compose.local.yaml](docker-compose.local.yaml) is the companion file that can:
+
+```powershell
+docker compose --env-file .env.local -f docker-compose.local.yaml up -d
+docker compose --env-file .env.local -f docker-compose.local.yaml ps
+```
+
+Three things make it different from the stock file, and each one is a deliberate choice worth understanding:
+
+**It pulls, it never builds.** No `build:` key anywhere. The images were built once on a CI runner; rebuilding them locally would produce something *similar* but not identical, which defeats the point of having a registry. What you run locally is bit-for-bit what CI published.
+
+**It carries one tag variable per service.** [.env.local](.env.local):
+```
+DH_USER=naveenreddy9
+CATALOGUE_TAG=11
+CART_TAG=15
+USER_TAG=3
+SHIPPING_TAG=6
+DISPATCH_TAG=7
+RATING_TAG=1
+PAYMENT_TAG=1
+WEB_TAG=1
+```
+Eight variables where the stock file has one, because `github.run_number` counts per workflow (Part 4.1). This is the file that goes stale — every CI run makes one of these numbers wrong, and nothing tells you.
+
+**It mixes all four image categories in one file**, grouped and commented so the boundaries stay visible: your eight from Docker Hub, `robotshop/rs-mongodb` and `rs-mysql-db` from upstream because of the seed data, `redis` and `rabbitmq` straight from their official images.
+
+**Service names are load-bearing, exactly as in Part 5.1.** [web/Dockerfile](web/Dockerfile) bakes in `CATALOGUE_HOST=catalogue`, `CART_HOST=cart` and so on as env defaults, and `entrypoint.sh` runs `envsubst` over them to generate the nginx config at container start. Rename a service in the compose file and nginx returns 502 for that route. Compose gives you DNS by service name for free — but the names still have to match what the image expects.
+
+**What it deliberately leaves out:** healthchecks. The stock file declares seven; this one declares none. That's why nobody noticed alpine had removed `curl` from the Node images (Part 2.4) — the healthchecks that would have failed weren't running. Adding them back, with `wget -q --spider` instead of `curl`, is a good exercise.
+
+**Teardown:**
+```powershell
+# stop, keep images cached for next time
+docker compose --env-file .env.local -f docker-compose.local.yaml down
+
+# stop and reclaim everything this project pulled (~1.2GB)
+docker compose --env-file .env.local -f docker-compose.local.yaml down --rmi all -v --remove-orphans
+```
+`-v` drops the volumes, so MongoDB and MySQL reseed from scratch on the next `up` — which is how you get back to a clean catalogue after experimenting. `--rmi all` is scoped to this project's images; `docker system prune -a` is not, and will happily delete images belonging to your other work.
+
+## 6.3 Day-2 practice
 
 **Logs and inspection**
 ```powershell
@@ -490,7 +766,7 @@ docker compose -f docker-compose.yaml -f docker-compose.prod.yaml config
 ```
 This override/merge idea reappears as Helm values files and Argo CD parameters later.
 
-## 5.3 What Compose doesn't solve
+## 6.4 What Compose doesn't solve
 
 | Problem | Why it matters |
 |---|---|
@@ -507,9 +783,9 @@ Compose is genuinely the right answer for a single-host deployment, a dev enviro
 
 ---
 
-# Part 6 — Kubernetes
+# Part 7 — Kubernetes
 
-## 6.1 A local cluster
+## 7.1 A local cluster
 
 ```powershell
 minikube start --cpus=4 --memory=6g --driver=docker
@@ -518,7 +794,7 @@ kubectl get nodes
 ```
 `kind create cluster` is a lighter alternative; Docker Desktop's built-in Kubernetes is the zero-install one. Any of them works — 10+ pods just need the CPU/memory to be allocated up front, or pods sit `Pending` with `Insufficient cpu`.
 
-## 6.2 Deploy it
+## 7.2 Deploy it
 
 ```powershell
 helm install robot-shop --namespace robot-shop --create-namespace K8s/helm --set nodeport=true
@@ -537,7 +813,7 @@ Read `rendered.yaml`. The chart's 28 templates become 12 Deployments, a Redis St
 
 The real value keys in this chart: `image.repo`, `image.version`, `image.pullPolicy`, `nodeport`, `psp.enabled`, `payment.gateway`, `redis.storageClassName`, `eum.key`, `eum.url`, `ocCreateRoute`, plus a per-service slot for `affinity`/`nodeSelector`/`tolerations`. (`openshift` exists in `values.yaml` but no template references it — a dead key.)
 
-## 6.3 Compose concepts → Kubernetes objects
+## 7.3 Compose concepts → Kubernetes objects
 
 | Compose | Kubernetes | What changed |
 |---|---|---|
@@ -554,7 +830,7 @@ The real value keys in this chart: `image.repo`, `image.version`, `image.pullPol
 
 The row worth pausing on is `depends_on` → nothing. Kubernetes deliberately has no ordering primitive: everything retries until it works. Once that clicks, most of its behaviour makes sense.
 
-## 6.4 Day-2 practice
+## 7.4 Day-2 practice
 
 **Rollout and rollback**
 ```powershell
@@ -629,24 +905,24 @@ spec:
 ```
 Point `robotshop.local` at `minikube ip` in your hosts file. An Ingress object does nothing without a controller watching it — remember that when you hit AKS/GKE later.
 
-## 6.5 What Kubernetes costs you
+## 7.5 What Kubernetes costs you
 
 Being honest about this is part of the skill:
 
 - **Enormous surface area.** You now maintain a cluster, a chart, RBAC, storage classes, an ingress controller, and a metrics pipeline — to run the same twelve containers.
 - **YAML everywhere**, and the rendered output is far removed from what you wrote.
 - **Debugging gets indirect** — the crash you're chasing may be a probe, a quota, a scheduling constraint, or the app.
-- **It's still not a deployment process.** Nothing here decides *when* to deploy, or from what. That's Parts 3 and 10.
+- **It's still not a deployment process.** Nothing here decides *when* to deploy, or from what. That's Parts 3 and 11.
 
-Kubernetes buys you: multi-host scheduling, self-healing, rolling updates with rollback, declarative reconciliation, autoscaling, and a portable API across every cloud — which is exactly what Part 7 tests.
+Kubernetes buys you: multi-host scheduling, self-healing, rolling updates with rollback, declarative reconciliation, autoscaling, and a portable API across every cloud — which is exactly what Part 8 tests.
 
 ---
 
-# Part 7 — Different environments
+# Part 8 — Different environments
 
-The point of this part is to find out how much of Part 6 actually transfers. Answer: the manifests transfer almost entirely; everything *around* them — identity, storage, ingress — does not.
+The point of this part is to find out how much of Part 7 actually transfers. Answer: the manifests transfer almost entirely; everything *around* them — identity, storage, ingress — does not.
 
-## 7.1 AWS EKS
+## 8.1 AWS EKS
 
 The repo ships five numbered docs that build a cluster. They're thin and have gaps, so here's the corrected path with the gaps filled.
 
@@ -687,7 +963,15 @@ kubectl -n robot-shop get ingress robot-shop -w    # wait for the ALB hostname
 1. **`EKS/helm/ingress.yaml` is in the chart root, not `templates/`.** Helm only renders files under `templates/`, so `helm install` ignores it completely. You must `kubectl apply` it yourself. Nothing in the repo says so. (Same for `AKS/helm/ingress.yaml` and `GKE/helm/gclb.yaml`.)
 2. **Pass `--set nodeport=true`.** The chart's `web` Service defaults to `type: LoadBalancer`, so without this you provision a *second* cloud load balancer competing with your ALB — and pay for both.
 
-Also worth knowing: across the `K8s`, `EKS`, `AKS` and `GKE` charts exactly one line differs — `redis.storageClassName` (`standard`/`gp2`/`default`/`default`) — and the three cloud charts **hardcode** it in `templates/redis-statefulset.yaml`, so `--set redis.storageClassName=...` is silently ignored there. Four near-identical charts maintained by hand is itself a defect worth fixing.
+**`EKS/helm` no longer matches the other three charts.** It has been refactored to carry a complete image reference per workload — `{{ .Values.cart.image }}` rather than `{{ .Values.image.repo }}/rs-cart:{{ .Values.image.version }}` — because the global `repo`/`version` pair cannot describe images built by eight independent pipelines. Part 4.4 walks through why, and through the three ways a half-finished version of that change fails.
+
+Always render before you deploy. This costs two seconds and catches every image mistake without a cluster:
+```bash
+helm template rs EKS/helm | grep "image:" | sort -u
+```
+Expect `naveenreddy9/*` for the eight services you build, `robotshop/rs-mongodb` and `rs-mysql-db` for the two seeded databases, and `redis`/`rabbitmq` pinned directly in their templates.
+
+Also worth knowing: `K8s`, `AKS` and `GKE` are still on the old global-`repo` scheme and still point at `robotshop/rs-*`. They're internally consistent, so they work — they just deploy upstream's images, not yours. Between those three, exactly one line differs: `redis.storageClassName` (`standard`/`default`/`default`) — and the two cloud charts **hardcode** it in `templates/redis-statefulset.yaml`, so `--set redis.storageClassName=...` is silently ignored there. Four near-identical charts maintained by hand is itself a defect worth fixing, and `EKS/helm` having now diverged from the other three makes that worse, not better. A single chart with a values file per environment is the real answer.
 
 **Tear down the same day:**
 ```bash
@@ -699,7 +983,7 @@ Then check the console for orphaned load balancers and EBS volumes. Set an AWS B
 
 **What EKS teaches that minikube can't:** IRSA/OIDC identity, a real ingress controller provisioning real cloud infrastructure, CSI storage classes, and the cost discipline that comes with all of it.
 
-## 7.2 OpenShift (planned — decide later)
+## 8.2 OpenShift (planned — decide later)
 
 You haven't run this yet, so here are the two entry points and what's actually different. Nothing else in this document depends on it.
 
@@ -722,11 +1006,11 @@ helm install robot-shop --set openshift=true --set nodeport=true K8s/helm
 
 ---
 
-# Part 8 — Observability
+# Part 9 — Observability
 
 Three questions, three tools: **what is happening** (metrics), **what happened** (logs), and **who told me** (alerts).
 
-## 8.1 What this app already exposes
+## 9.1 What this app already exposes
 
 These are the real metric names — `cart` and `payment` are the only instrumented services:
 
@@ -743,7 +1027,7 @@ curl http://localhost:8080/api/payment/metrics
 ```
 Note these are *business* metrics, not CPU graphs — "are we selling anything" is usually a better alert than "is CPU high".
 
-## 8.2 Prometheus + Grafana on the Compose stack
+## 9.2 Prometheus + Grafana on the Compose stack
 
 `observability/prometheus.yml`:
 ```yaml
@@ -791,7 +1075,7 @@ histogram_quantile(0.95, rate(cart_value_bucket[5m]))
 ```
 The concepts that matter here: Prometheus **pulls** (targets don't push); counters only go up, so you always wrap them in `rate()`; and a histogram is really a set of `_bucket` series, which is why `histogram_quantile` needs them.
 
-## 8.3 Prometheus on Kubernetes
+## 9.3 Prometheus on Kubernetes
 
 ```powershell
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -819,7 +1103,7 @@ spec:
 ```
 Check the real labels and port names first with `kubectl -n robot-shop get svc payment -o yaml`. This is the Operator pattern: a CRD turns "edit a config file" into "create an object", and discovery becomes label-driven.
 
-## 8.4 Logs with ELK
+## 9.4 Logs with ELK
 
 Good news — the repo's [fluentd/](fluentd/) already uses the **Elasticsearch output plugin**, so ELK is the natural fit. It just points at a Humio endpoint with placeholder credentials, which means it ships nothing until you repoint it.
 
@@ -882,7 +1166,7 @@ Repeat per service. Open Kibana at http://localhost:5601, create a data view on 
 
 On Kubernetes, deploy `fluentd/Kubernetes/fluentd.yaml` with the output repointed at your Elasticsearch, and compare: the DaemonSet tails node log files, so applications need no configuration at all. That contrast — push vs. tail — is the main architectural lesson in logging.
 
-## 8.5 Alerting, and watching a real failure
+## 9.5 Alerting, and watching a real failure
 
 Prometheus rules:
 ```yaml
@@ -911,7 +1195,7 @@ For each, write a short timeline: what the dashboard showed, which log line in K
 
 ---
 
-# Part 9 — Provisioning: Terraform and Ansible
+# Part 10 — Provisioning: Terraform and Ansible
 
 Both are "infrastructure as code", and they own different halves:
 
@@ -922,9 +1206,9 @@ Both are "infrastructure as code", and they own different halves:
 | Model | declarative, with state | idempotent tasks, no state file |
 | Here | creates the EKS cluster | configures EC2 hosts to run the app |
 
-## 9.1 Terraform — build the EKS cluster as code
+## 10.1 Terraform — build the EKS cluster as code
 
-Everything you did by hand in Part 7.1 becomes a file. Create `terraform/main.tf`:
+Everything you did by hand in Part 8.1 becomes a file. Create `terraform/main.tf`:
 
 ```hcl
 terraform {
@@ -966,7 +1250,7 @@ module "eks" {
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
 
-  enable_irsa = true          # the OIDC step from Part 7.1, declared
+  enable_irsa = true          # the OIDC step from Part 8.1, declared
 
   eks_managed_node_groups = {
     default = {
@@ -989,9 +1273,9 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 terraform destroy
 ```
 
-**What to take away:** `plan` shows you the diff before anything happens — no other tool in this document gives you that. **State** is the file that maps your code to real resources; it must be remote (S3 + DynamoDB locking) the moment more than one person is involved, and drift between state and reality is the classic Terraform incident. And compare honestly against Part 7.1: five documents of manual commands versus one `apply` that is reproducible and destroyable.
+**What to take away:** `plan` shows you the diff before anything happens — no other tool in this document gives you that. **State** is the file that maps your code to real resources; it must be remote (S3 + DynamoDB locking) the moment more than one person is involved, and drift between state and reality is the classic Terraform incident. And compare honestly against Part 8.1: five documents of manual commands versus one `apply` that is reproducible and destroyable.
 
-## 9.2 Ansible — configure the machines
+## 10.2 Ansible — configure the machines
 
 Your WSL Oracle Linux is the control node; targets are EC2 instances (or local VMs).
 
@@ -1034,12 +1318,13 @@ node1 ansible_host=<ec2-public-ip> ansible_user=ec2-user ansible_ssh_private_key
         source: pull
       loop:
         - nginx:1.21.6
-        - node:14
-        - debian:10
-        - openjdk:8-jdk
+        - node:20-alpine
+        - alpine:latest
+        - maven:3.6.3-jdk-8
+        - eclipse-temurin:25-jre-alpine
         - php:7.4-apache
         - python:3.9
-        - golang:1.23
+        - golang:1.24
 ```
 That image list is the real set of `FROM` lines in this repo — the same job [pullbaseimages.sh](pullbaseimages.sh) does imperatively, done declaratively.
 
@@ -1053,7 +1338,7 @@ Then go further: a playbook that copies `docker-compose.yaml` to the host and br
 
 ---
 
-# Part 10 — GitOps with Argo CD
+# Part 11 — GitOps with Argo CD
 
 Everything so far deploys by *pushing*: you (or CI) run `helm upgrade` against a cluster, which means your pipeline holds cluster credentials and nothing notices if someone changes the cluster by hand afterwards.
 
@@ -1101,23 +1386,30 @@ Two experiments that make the idea land:
 
 ---
 
-# Part 11 — Suggested order
+# Part 12 — Suggested order
 
 | Stage | Parts | Notes |
 |---|---|---|
 | 1 | **1 — App design** | One sitting. Read the compose file and the nginx template side by side. |
-| 2 | **2 — Dockerfiles** | Do the `dispatch` multi-stage refactor; it's the most satisfying single change in the repo. |
-| 3 | **3 — CI** | Do the broken-workflow diagnosis on paper before opening the answer key. |
-| 4 | **4 — Plain Docker** | Don't skip it. Everything after this is a reaction to the pain here. |
-| 5 | **5 — Compose** | Add the missing volumes; run the failure-injection drills. |
-| 6 | **6 — Kubernetes** | The biggest block. `helm template` early — it demystifies everything after. |
-| 7 | **8 — Observability** | Deliberately before the cloud: it's free locally, and it makes Part 7 far more interesting. |
-| 8 | **7.1 — EKS** | Costs money. Set a budget alert first, tear down the same day. |
-| 9 | **9 — Terraform + Ansible** | Terraform rebuilds Part 7.1 as code; Ansible configures hosts for Part 4. |
-| 10 | **10 — Argo CD** | Needs Parts 3 and 6 working. Closes the loop. |
-| — | **7.2 — OpenShift** | Optional, whenever you want it. Nothing else depends on it. |
+| 2 | **2 — Dockerfiles** | ✅ dispatch multi-stage and the alpine move are done. The open items in 2.4 are the remaining work. |
+| 3 | **3 — CI** | ✅ All eight pipelines build and push. 3.4 is the list of what's still wrong with them — start there. |
+| 4 | **4 — Registry** | Short, and it prevents a whole category of confusion in every part after it. Don't skip it. |
+| 5 | **5 — Plain Docker** | Don't skip this either. Everything after is a reaction to the pain here. |
+| 6 | **6 — Compose** | Add the missing volumes; add healthchecks to the local file; run the failure-injection drills. |
+| 7 | **7 — Kubernetes** | The biggest block. `helm template` early — it demystifies everything after. |
+| 8 | **9 — Observability** | Deliberately before the cloud: it's free locally, and it makes Part 8 far more interesting. |
+| 9 | **8.1 — EKS** | Costs money. Set a budget alert first, tear down the same day. |
+| 10 | **10 — Terraform + Ansible** | Terraform rebuilds Part 8.1 as code; Ansible configures hosts for Part 5. |
+| 11 | **11 — Argo CD** | Needs Parts 3 and 7 working. Closes the loop. |
+| — | **8.2 — OpenShift** | Optional, whenever you want it. Nothing else depends on it. |
 
 Two habits worth keeping the whole way through:
 
 1. **Keep a defects log.** Every broken thing you find in this repo (Part 1.4 is a starting list) is interview material — you found it, diagnosed it, and can explain the fix.
 2. **Tear cloud resources down the same day.** It's the one mistake here that costs money rather than time.
+
+Three habits this repo has already taught the hard way, worth carrying forward:
+
+3. **After a push, check the workflow you expected actually ran.** A trigger that doesn't match produces no output at all — indistinguishable from "nothing needed doing" (Part 3.3.1).
+4. **Render before you deploy.** `helm template` and `docker compose config` both show you the final resolved result for free. Most image and tag mistakes are visible there (Parts 4.5, 8.1).
+5. **Distrust a shared value the moment two consumers need different ones.** `REPO`/`TAG` and Helm's `image.version` were fine until they weren't, and the failure mode was ten pods in `ImagePullBackOff` (Part 4.4).
