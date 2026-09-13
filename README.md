@@ -26,7 +26,7 @@ This repository includes:
 - 🔄 **CI Pipelines** publishing to personal registries.
 - 🐳 **Local-Run paths** for day-to-day development.
 - 📦 **Refactored EKS charts** for Kubernetes deployments.
-- 📚 **Comprehensive Learning Path** in [**DEVOPS_ROADMAP.md**](DEVOPS_ROADMAP.md).
+- 📚 **Comprehensive Learning Path** in [**DEVOPS_PRACTICES.md**](DEVOPS_PRACTICES.md).
 
 > **Disclaimer:** Error handling is patchy and there is no security built in. This is deliberate — the defects are the teaching material!
 
@@ -120,7 +120,7 @@ graph TD
 ├── fluentd/                     Log shipping for Compose and Kubernetes
 ├── load-gen/                    Locust load generator
 │
-├── DEVOPS_ROADMAP.md            12-part learning path  ← start here
+├── DEVOPS_PRACTICES.md          DevOps process & best practices  ← start here
 └── PRACTICE_GUIDE.md            Index into the roadmap
 ```
 
@@ -169,14 +169,14 @@ Ready to scale? Robot Shop can be deployed to:
 - **Azure AKS & Google GKE**
 - **Docker Swarm & OpenShift**
 
-Detailed instructions for all platforms are available in the [**DevOps Roadmap**](DEVOPS_ROADMAP.md).
+Detailed instructions for all platforms are available in the [**DevOps Practices**](DEVOPS_PRACTICES.md).
 
 ## 📖 Learning & Practice
 
 Take your DevOps skills to the next level with our curated learning materials:
 
 - 👉 **[PRACTICE_GUIDE.md](PRACTICE_GUIDE.md):** Quick overview of DevOps practices.
-- 👉 **[DEVOPS_ROADMAP.md](DEVOPS_ROADMAP.md):** A 12-part comprehensive learning path from Docker to GitOps with ArgoCD.
+- 👉 **[DEVOPS_PRACTICES.md](DEVOPS_PRACTICES.md):** DevOps process & best practices from Docker to GitOps with ArgoCD.
 
 ---
 <div align="center">

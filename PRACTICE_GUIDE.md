@@ -5,7 +5,7 @@
 
 ---
 
-This guide highlights the core DevOps practices implemented in this project. While the full **[DEVOPS_ROADMAP.md](DEVOPS_ROADMAP.md)** provides deep dives into *why* these tools are used, this document shows you *how* we apply them.
+This guide highlights the core DevOps practices implemented in this project. While the full **[DEVOPS_PRACTICES.md](DEVOPS_PRACTICES.md)** provides deep dives into *why* these tools are used, this document shows you *how* we apply them.
 
 ## 🐳 1. Dockerfile Design Practices
 
@@ -68,4 +68,4 @@ In plain `docker-compose.yaml`, the MongoDB and MySQL containers do not use name
 You might see hardcoded JVM heap flags (`-Xmn256m`, `-Xmx768m`) in older Java Dockerfiles. Modern JVMs (running in Kubernetes or Docker) are cgroup-aware and calculate heap sizes automatically based on the container's RAM limits. Avoid hardcoding these where possible!
 
 ---
-💡 **Want to learn how to build this from scratch?** Check out the full 12-part [**DevOps Roadmap**](DEVOPS_ROADMAP.md).
+💡 **Want to learn how to build this from scratch?** Check out the full [**DevOps Practices**](DEVOPS_PRACTICES.md).
