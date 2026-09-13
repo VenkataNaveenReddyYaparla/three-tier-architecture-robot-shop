@@ -34,6 +34,57 @@ This repository includes:
 
 A robust microservices mesh where each service owns its data layer:
 
+```mermaid
+graph TD
+    Browser[🌐 Browser] -->|HTTP:8080| Web[Web - NGINX]
+    Web -->|/api/catalogue| Catalogue(Catalogue - Node.js)
+    Web -->|/api/user| User(User - Node.js)
+    Web -->|/api/cart| Cart(Cart - Node.js)
+    Web -->|/api/shipping| Shipping(Shipping - Java)
+    Web -->|/api/ratings| Ratings(Ratings - PHP)
+    Web -->|/api/payment| Payment(Payment - Python)
+    
+    Catalogue --> MongoDB1[(MongoDB)]
+    User --> MongoDB1
+    User --> Redis1[(Redis)]
+    Cart --> Redis1
+    Shipping --> MySQL1[(MySQL)]
+    Ratings --> MySQL1
+    Payment --> RabbitMQ[(RabbitMQ)]
+    RabbitMQ --> Dispatch(Dispatch - Go)
+
+    classDef proxy fill:#2CA5E0,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef nodejs fill:#339933,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef java fill:#ED8B00,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef php fill:#777BB4,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef python fill:#3776AB,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef go fill:#00ADD8,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef db fill:#555,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef browser fill:#999,stroke:#fff,stroke-width:2px,color:#fff;
+
+    class Browser browser;
+    class Web proxy;
+    class Catalogue,User,Cart nodejs;
+    class Shipping java;
+    class Ratings php;
+    class Payment python;
+    class Dispatch go;
+    class MongoDB1,Redis1,MySQL1,RabbitMQ db;
+```
+
+### Routing Table
+
+| Path | Backend |
+|---|---|
+| `/api/catalogue/` | `catalogue:8080` |
+| `/api/user/` | `user:8080` |
+| `/api/cart/` | `cart:8080` |
+| `/api/shipping/` | `shipping:8080` |
+| `/api/payment/` | `payment:8080` |
+| `/api/ratings/` | `ratings:80` |
+
+### Services Summary
+
 | Service | Language | Data Store | Port |
 |---------|----------|------------|------|
 | **🕸️ Web** | NGINX + AngularJS | — | `8080` |
