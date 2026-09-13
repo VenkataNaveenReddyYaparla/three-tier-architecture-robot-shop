@@ -551,12 +551,12 @@ docker network create robot-shop-manual
 docker run -d --name mongodb   --network robot-shop-manual robotshop/rs-mongodb:2.1.0
 docker run -d --name redis     --network robot-shop-manual redis:6.2-alpine
 docker run -d --name rabbitmq  --network robot-shop-manual rabbitmq:3.8-management-alpine
-docker run -d --name mysql     --network robot-shop-manual robotshop/rs-mysql-db:2.1.0
+docker run -d --name mysql     --network robot-shop-manual --cap-add NET_ADMIN robotshop/rs-mysql-db:2.1.0
 docker run -d --name catalogue --network robot-shop-manual robotshop/rs-catalogue:2.1.0
 docker run -d --name user      --network robot-shop-manual robotshop/rs-user:2.1.0
 docker run -d --name cart      --network robot-shop-manual robotshop/rs-cart:2.1.0
 docker run -d --name shipping  --network robot-shop-manual robotshop/rs-shipping:2.1.0
-docker run -d --name ratings   --network robot-shop-manual robotshop/rs-ratings:2.1.0
+docker run -d --name ratings   --network robot-shop-manual -e APP_ENV=prod robotshop/rs-ratings:2.1.0
 docker run -d --name payment   --network robot-shop-manual robotshop/rs-payment:2.1.0
 docker run -d --name dispatch  --network robot-shop-manual robotshop/rs-dispatch:2.1.0
 docker run -d --name web -p 8080:8080 --network robot-shop-manual robotshop/rs-web:2.1.0
@@ -568,10 +568,38 @@ Open http://localhost:8080.
 
 Things to notice while it's running:
 ```powershell
-docker logs -f cart              # start it before redis and watch it crash-loop, then recover
-docker exec -it cart sh          # then: wget -qO- http://catalogue:8080/products
+docker logs -f cart              # start cart before redis: it logs "Redis ERROR" and keeps running
+docker exec -it cart sh          # then: wget -qO- http://catalogue:8080/products   (DNS by container name)
+                                 #       wget -qO- http://localhost:8080/health     -> {"app":"OK","redis":false}
 docker stats                     # no limits set, so every container can eat the whole host
 ```
+
+**What that cart experiment actually shows** is more interesting than a crash. [cart/server.js:394](cart/server.js#L394) handles a Redis failure by logging it and nothing else — `redisConnected` stays `false`, the HTTP server still starts, and `/health` returns `200` with `"redis": false` in the body. So the container is "up", the health endpoint answers, and every cart operation fails. Nothing here would restart it either: `docker run -d` sets no `--restart` policy, so a container that *did* exit would just sit there stopped. Learning to spot a service that reports itself healthy while a hard dependency is missing is what Part 9 is for.
+
+## 5.2 What that first line is actually doing
+
+`docker network create robot-shop-manual` isn't setup boilerplate — it's the thing that makes every `--network robot-shop-manual` flag below it mean anything, and it explains two behaviors worth understanding before you hit them by accident.
+
+**Why the containers need a *named* network at all.** Docker's default network (the one every container gets with no `--network` flag) is a bridge with no DNS — containers on it can only reach each other by IP, and that IP changes on every restart. A **user-defined** bridge is different: Docker runs an embedded DNS resolver on it that maps each container's `--name` to its current IP. That's the only reason `web/Dockerfile`'s `CATALOGUE_HOST=catalogue` default works — "catalogue" has to resolve to something, and it only does inside a network you created yourself.
+
+**What happens if you skip that line, or run it in a different order.** `docker run` is really two steps — create the container, then start it and attach it to its network. Docker performs those as separate operations, so if `robot-shop-manual` doesn't exist yet:
+
+```
+docker run -d --name mongodb --network robot-shop-manual robotshop/rs-mongodb:2.1.0
+# container object is created successfully
+# then: Error response from daemon: network robot-shop-manual not found
+```
+
+The container **is created** — `docker ps -a` shows it — but it's never started, so `docker ps` (running containers only) shows nothing at all. Twelve `docker run`s against a missing network produces exactly that: twelve containers stuck in `Created` state, zero running, port 8080 bound to nothing, and the app unreachable with no single error message pointing at the cause. This is the actual failure mode behind "I ran the commands and nothing's there" — the fix is never to delete and recreate the containers, since every one of them is already configured correctly:
+
+```powershell
+docker network create robot-shop-manual
+docker start mongodb redis rabbitmq mysql catalogue user cart shipping ratings payment dispatch web
+```
+
+`docker start` re-runs only the network-attach step that failed the first time — because the container's config (image, name, `--network`, ports) was captured correctly at `create` time, `start` succeeding is all that was ever missing.
+
+**The same class of mistake, one level up:** a network created with no explicit driver (`docker network create foo`, no `-d`) defaults to `bridge` and stays entirely local to this Docker host. Nothing here spans multiple hosts — that's the gap `overlay` networks and, later, Kubernetes' pod network close (Part 7).
 
 ---
 
