@@ -96,6 +96,58 @@ graph TD
 | **💳 Payment** | Python (Flask) | RabbitMQ (Pub) | `8080` |
 | **📨 Dispatch** | Go | RabbitMQ (Sub) | — |
 
+<details>
+<summary><b>📁 Project Structure</b></summary>
+
+```text
+.
+├── .github/workflows/           8 CI pipelines, one per service
+│
+├── catalogue/ user/ cart/       Node.js services
+├── shipping/                    Java / Spring Boot
+├── ratings/                     PHP / Symfony
+├── payment/                     Python / Flask
+├── dispatch/                    Go
+├── web/                         nginx + AngularJS UI
+│
+├── mongo/ mysql/                Data stores with SEED DATA (users, products, geo)
+├── docker-compose.yaml          Builds from source, upstream image names
+├── docker-compose.local.yaml    Pulls only, YOUR registry  ← day-to-day
+├── .env / .env.local            Registry and tag variables
+│
+├── K8s/ EKS/ AKS/ GKE/          Kubernetes / Helm charts (AWS, Azure, Google)
+├── OpenShift/ Swarm/ DCOS/      Alternative orchestrators
+│
+├── fluentd/                     Log shipping for Compose and Kubernetes
+├── load-gen/                    Locust load generator
+│
+├── DEVOPS_ROADMAP.md            12-part learning path  ← start here
+└── PRACTICE_GUIDE.md            Index into the roadmap
+```
+</details>
+
+<details>
+<summary><b>🐳 Where the images come from</b></summary>
+
+Twelve containers run in this stack. Conflating where their images come from is a common source of errors (like an empty product catalogue).
+
+1. **Built by CI**: Each service pushes its own `:latest` and `:${github.run_number}` to your registry.
+2. **Upstream with baked data**: `rs-mongodb` and `rs-mysql-db`. These are NOT the official `mongo` or `mysql` images—they contain the actual product and user data!
+3. **Open source, unmodified**: `redis` and `rabbitmq`.
+4. **Base images**: The `FROM` lines in the Dockerfiles, used during CI build.
+
+</details>
+
+<details>
+<summary><b>🔄 CI/CD, Observability & Load Gen</b></summary>
+
+- **CI Pipelines:** There are 8 GitHub Action workflows in `.github/workflows/`, one per service. They build the image and push it to your Docker Hub on changes. 
+- **Metrics:** `cart` and `payment` expose `/metrics` for Prometheus.
+- **Logs:** `fluentd/` ships log-forwarding configs for both Compose and Kubernetes.
+- **Load Generation:** A Locust load generator is included in `load-gen/`. You can run it via `docker compose -f docker-compose.yaml -f docker-compose-load.yaml up -d`.
+
+</details>
+
 ## 🛠️ Quick Start
 
 **1. Clone & Configure**
