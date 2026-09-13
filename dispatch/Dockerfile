@@ -1,10 +1,16 @@
-FROM golang:1.23
+FROM golang:1.23 AS builder
 
 WORKDIR /go/src/app
 
 COPY *.go .
 
-RUN go mod init dispatch && go mod tidy
-RUN go build -o dispatch .
+RUN go mod init dispatch # This will create go.mod file
+RUN go mod tidy  # downloads dependencies and creates go.sum
+RUN CGO_ENABLED=0 go build -o dispatch . # CGO makes static binary no run time libraries
+
+FROM alphine:Latest
+
+WORKDIR /app
+COPY --from=builder /app/dispatch .
 
 CMD ["./dispatch"]

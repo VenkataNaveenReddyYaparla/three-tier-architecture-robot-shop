@@ -1,0 +1,45 @@
+name: rating
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'ratings/html/**'
+      - 'ratings/Dockerfile'
+      - '.github/workflows/rating.yaml'
+  
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'ratings/html/**'
+      - 'ratings/Dockerfile'
+
+jobs:
+  rating:
+    name: Build and push to Registry
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ratings
+    
+    steps:
+      - name: git checkout
+        uses: actions/checkout@v7
+      
+      - name: build the image
+        run:
+          docker build -t ${{secrets.DOCKERHUB_USERNAME}}/rating:${{ github.run_number}} .
+
+      - name: Login to Dockerhub registry
+        run:
+          docker login -u ${{secrets.DOCKERHUB_USERNAME}} -p ${{secrets.DOCKERHUB_TOKEN}}
+
+      - name: Push to registry
+        run:
+          docker push ${{secrets.DOCKERHUB_USERNAME}}/rating:${{ github.run_number}}
+    
+
+
+      
