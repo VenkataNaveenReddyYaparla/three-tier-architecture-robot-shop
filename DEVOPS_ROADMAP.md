@@ -1,4 +1,4 @@
-# DevOps Learning Path — Stan's Robot Shop
+# 📚 DevOps Learning Path — Stan's Robot Shop
 
 A single progression built around one question at each step: **what does this tool fix that the previous one couldn't?**
 
@@ -6,11 +6,12 @@ Design of the app → Dockerfiles → CI → the registry → plain Docker → C
 
 **Your setup (assumed throughout):** Windows 11 + Docker Desktop (WSL2 backend), **Oracle Linux on WSL** as the Linux workstation, and an AWS account. Commands marked `powershell` run on Windows; commands marked `bash` run in your WSL Oracle Linux shell — every `.sh` file in this repo is POSIX shell and belongs there. Docker Desktop shares its engine with WSL, so `docker` works in both (enable it under Settings → Resources → WSL Integration).
 
+> [!NOTE]
 > **Status:** the CI workflows that were originally broken (`dispatch`, `payment`, `shipping`, `user`) have all been **fixed**, and the two that were missing (`ratings`, `web`) have been **written**. All eight now build and push to the `naveenreddy9` Docker Hub namespace. Parts 3.3–3.5 keep the original diagnosis as the reference material — they're written as solved exercises, not pending ones.
 
 ---
 
-# Part 1 — How this project is designed
+# 🏗️ Part 1 — How this project is designed
 
 ## 1.1 The shape of it
 
@@ -78,7 +79,7 @@ Keep a running list as you go. The habit of recording *what was wrong and why* i
 
 ---
 
-# Part 2 — Dockerfile design and best practices
+# 🐳 Part 2 — Dockerfile design and best practices
 
 ## 2.1 What a Dockerfile actually is
 
@@ -235,7 +236,7 @@ Two things worth taking from that:
 
 ---
 
-# Part 3 — How CI works
+# 🔄 Part 3 — How CI works
 
 ## 3.1 The mechanics
 
@@ -412,7 +413,7 @@ Note the tag: `github.sha` is immutable and traceable to an exact commit. `githu
 
 ---
 
-# Part 4 — The registry: image identity and tags
+# 📦 Part 4 — The registry: image identity and tags
 
 CI produces images. Everything after this part consumes them. The joint between the two is the registry, and it's where a specific class of confusion lives — the kind that produces `manifest unknown` at 11pm, or worse, a deploy that silently runs last week's code.
 
@@ -579,7 +580,7 @@ helm template rs EKS/helm | grep "image:" | sort -u
 
 ---
 
-# Part 5 — Deploy with plain Docker
+# 🚀 Part 5 — Deploy with plain Docker
 
 Do this once, properly. Everything after it is a reaction to the problems you're about to feel.
 
@@ -648,7 +649,7 @@ Every one of these is what the next tool fixes.
 
 ---
 
-# Part 6 — Docker Compose
+# 🐳 Part 6 — Docker Compose
 
 ## 6.1 The same stack, declared once
 
@@ -783,7 +784,7 @@ Compose is genuinely the right answer for a single-host deployment, a dev enviro
 
 ---
 
-# Part 7 — Kubernetes
+# ☸️ Part 7 — Kubernetes
 
 ## 7.1 A local cluster
 
@@ -918,7 +919,7 @@ Kubernetes buys you: multi-host scheduling, self-healing, rolling updates with r
 
 ---
 
-# Part 8 — Different environments
+# ☁️ Part 8 — Different environments
 
 The point of this part is to find out how much of Part 7 actually transfers. Answer: the manifests transfer almost entirely; everything *around* them — identity, storage, ingress — does not.
 
@@ -1006,7 +1007,7 @@ helm install robot-shop --set openshift=true --set nodeport=true K8s/helm
 
 ---
 
-# Part 9 — Observability
+# 📊 Part 9 — Observability
 
 Three questions, three tools: **what is happening** (metrics), **what happened** (logs), and **who told me** (alerts).
 
@@ -1195,7 +1196,7 @@ For each, write a short timeline: what the dashboard showed, which log line in K
 
 ---
 
-# Part 10 — Provisioning: Terraform and Ansible
+# 🛠️ Part 10 — Provisioning: Terraform and Ansible
 
 Both are "infrastructure as code", and they own different halves:
 
@@ -1338,7 +1339,7 @@ Then go further: a playbook that copies `docker-compose.yaml` to the host and br
 
 ---
 
-# Part 11 — GitOps with Argo CD
+# 🔄 Part 11 — GitOps with Argo CD
 
 Everything so far deploys by *pushing*: you (or CI) run `helm upgrade` against a cluster, which means your pipeline holds cluster credentials and nothing notices if someone changes the cluster by hand afterwards.
 
@@ -1386,7 +1387,7 @@ Two experiments that make the idea land:
 
 ---
 
-# Part 12 — Suggested order
+# 🗺️ Part 12 — Suggested order
 
 | Stage | Parts | Notes |
 |---|---|---|
