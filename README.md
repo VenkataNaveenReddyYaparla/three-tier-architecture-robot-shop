@@ -61,23 +61,6 @@ catalogue  user        cart      shipping   ratings    payment
 
 > **Service names are load-bearing.** [web/Dockerfile](web/Dockerfile) bakes in `CATALOGUE_HOST=catalogue`, `CART_HOST=cart` and so on as env defaults. Docker and Kubernetes both resolve a service's name as its hostname, so renaming a service in any manifest returns 502 for that route until you also change the matching `*_HOST` variable.
 
-### Failure behaviour
-
-Worth knowing before you start breaking things deliberately:
-
-| Caller | Depends on | What happens when the dependency dies |
-|---|---|---|
-| web | catalogue, user, shipping, payment | 502s on those routes; the UI still loads |
-| catalogue | MongoDB | hard — product listing fails |
-| user | MongoDB, Redis | hard — login/session fails |
-| cart | Redis | hard — cart dies instantly |
-| shipping | MySQL | hangs rather than fails fast |
-| ratings | MySQL | hard — ratings fail |
-| payment | RabbitMQ | **soft** — payment still succeeds, message queues up |
-| dispatch | RabbitMQ | **silent** — it simply stops consuming |
-
-The payment → dispatch pair is the instructive one: it's asynchronous, so a RabbitMQ outage produces no user-visible error at all. Only a growing queue and a silent consumer.
-
 ---
 
 ## Technologies
