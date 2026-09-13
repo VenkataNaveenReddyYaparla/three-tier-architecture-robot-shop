@@ -18,8 +18,6 @@
 
 ![Stan's Robot Shop App](./screenshot.png)
 
-> **Note:** Please make sure the attached screenshot is saved as `screenshot.png` in the root of this repository.
-
 ## 🚀 Overview
 
 **Stan's Robot Shop** is a sample microservice application used as a hands-on sandbox for container orchestration, CI/CD, and observability. It consists of **eight services** written in **six languages**, backed by **four data stores**. 
