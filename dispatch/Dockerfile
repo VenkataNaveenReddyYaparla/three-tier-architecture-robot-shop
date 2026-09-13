@@ -11,6 +11,6 @@ RUN CGO_ENABLED=0 go build -o dispatch . # CGO makes static binary no run time l
 FROM alpine:latest
 
 WORKDIR /app
-COPY --from=builder /app/dispatch .
+COPY --from=builder go/src/app/dispatch .
 
 CMD ["./dispatch"]
