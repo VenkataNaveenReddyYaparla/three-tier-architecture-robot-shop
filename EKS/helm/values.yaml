@@ -1,8 +1,5 @@
-# Registry and repository for Docker images
-# Default is docker/robotshop/image:latest
+# Pull policy, applied to every workload in this chart.
 image:
-  repo: robotshop
-  version: latest
   pullPolicy: IfNotPresent
 
 # EUM configuration
@@ -24,41 +21,68 @@ openshift: false
 
 ocCreateRoute: false
 
-######################################
-# Affinities for individual workloads
-# set in the following way:
+##########################################################################
+# Per-workload image and scheduling.
+#
+# Each service carries its OWN image, because each GitHub Actions workflow
+# tags with its own github.run_number -- there is no single version that
+# applies across all of them, and no :latest is ever pushed.
+#
+# Affinities are set on the same key:
 # <workload>:
+#   image: <repo>/<name>:<tag>
 #   affinity: {}
 #   nodeSelector: {}
 #   tolerations: []
-######################################
+##########################################################################
 
-cart: {}
+# ---- built by .github/workflows/*, pushed to your Docker Hub ----
 
-catalogue: {}
+cart:
+  image: naveenreddy9/cart:15
 
-dispatch: {}
+catalogue:
+  image: naveenreddy9/catalogue:11
 
-mongodb: {}
-
-mysql: {}
+dispatch:
+  image: naveenreddy9/dispatch:7
 
 payment:
+  image: naveenreddy9/payment:1
   # Alternative payment gateway URL
   # Default is https://www.paypal.com
   gateway: null
   #gateway: https://www.worldpay.com
 
-rabbitmq: {}
+# note: the workflow pushes 'rating' (singular)
+ratings:
+  image: naveenreddy9/rating:1
 
-ratings: {}
+shipping:
+  image: naveenreddy9/shipping:6
+
+web:
+  image: naveenreddy9/web:1
+
+# ---- upstream robotshop images ----
+# mongodb and mysql bake in the seed data (mongo/catalogue.js,
+# mysql/scripts) and no workflow builds them. Plain mongo/mysql
+# images would start empty.
+# user is here until .github/workflows/user.yaml pushes successfully.
+
+mongodb:
+  image: robotshop/rs-mongodb:2.1.0
+
+mysql:
+  image: robotshop/rs-mysql-db:2.1.0
+
+user:
+  image: robotshop/rs-user:2.1.0
+
+# ---- images pinned directly in their templates ----
+
+rabbitmq: {}
 
 redis:
   # Storage class to use with redis statefulset.
   storageClassName: gp2
-
-shipping: {}
-
-user: {}
-
-web: {}

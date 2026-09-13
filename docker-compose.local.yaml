@@ -1,0 +1,102 @@
+# Local run using YOUR Docker Hub images where a workflow exists,
+# and upstream / open-source images everywhere else.
+#
+#   docker compose --env-file .env.local -f docker-compose.local.yaml up -d
+#
+# Nothing here is built. Every image is pulled.
+
+services:
+
+  # ---------------------------------------------------------------
+  # 1. Plain open-source images. Pulled straight from Docker Hub,
+  #    unmodified. No workflow, no Dockerfile in this repo.
+  # ---------------------------------------------------------------
+  redis:
+    image: redis:6.2-alpine
+    networks: [robot-shop]
+    logging: &logging
+      driver: "json-file"
+      options: { max-size: "25m", max-file: "2" }
+
+  rabbitmq:
+    image: rabbitmq:3.8-management-alpine
+    networks: [robot-shop]
+    logging: *logging
+
+  # ---------------------------------------------------------------
+  # 2. Upstream robotshop images. These are NOT plain mongo/mysql --
+  #    they bake in the seed data (mongo/catalogue.js, mysql/scripts).
+  #    You have no workflow building them, so pull the originals.
+  #    'user' is here too: .github/workflows/user.yaml never pushes.
+  # ---------------------------------------------------------------
+  mongodb:
+    image: robotshop/rs-mongodb:2.1.0
+    networks: [robot-shop]
+    logging: *logging
+
+  mysql:
+    image: robotshop/rs-mysql-db:2.1.0
+    cap_add: [NET_ADMIN]
+    networks: [robot-shop]
+    logging: *logging
+
+  user:
+    image: robotshop/rs-user:2.1.0
+    depends_on: [mongodb, redis]
+    networks: [robot-shop]
+    logging: *logging
+
+  # ---------------------------------------------------------------
+  # 3. YOUR images, built and pushed by .github/workflows/*.
+  #    Tag is ${{ github.run_number }}, which is different per
+  #    workflow -- so each one needs its own tag variable.
+  # ---------------------------------------------------------------
+  catalogue:
+    image: ${DH_USER}/catalogue:${CATALOGUE_TAG}
+    depends_on: [mongodb]
+    networks: [robot-shop]
+    logging: *logging
+
+  cart:
+    image: ${DH_USER}/cart:${CART_TAG}
+    depends_on: [redis]
+    networks: [robot-shop]
+    logging: *logging
+
+  shipping:
+    image: ${DH_USER}/shipping:${SHIPPING_TAG}
+    depends_on: [mysql]
+    networks: [robot-shop]
+    logging: *logging
+
+  # note: workflow pushes 'rating' (singular), service is 'ratings'
+  ratings:
+    image: ${DH_USER}/rating:${RATING_TAG}
+    environment:
+      APP_ENV: prod
+    depends_on: [mysql]
+    networks: [robot-shop]
+    logging: *logging
+
+  payment:
+    image: ${DH_USER}/payment:${PAYMENT_TAG}
+    depends_on: [rabbitmq]
+    networks: [robot-shop]
+    logging: *logging
+
+  dispatch:
+    image: ${DH_USER}/dispatch:${DISPATCH_TAG}
+    depends_on: [rabbitmq]
+    networks: [robot-shop]
+    logging: *logging
+
+  web:
+    image: ${DH_USER}/web:${WEB_TAG}
+    depends_on: [catalogue, user, cart, shipping, payment, ratings]
+    ports:
+      - "8080:8080"
+    networks: [robot-shop]
+    logging: *logging
+
+networks:
+  robot-shop:
