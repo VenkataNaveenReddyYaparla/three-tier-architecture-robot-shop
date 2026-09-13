@@ -27,7 +27,6 @@ services:
   # 2. Upstream robotshop images. These are NOT plain mongo/mysql --
   #    they bake in the seed data (mongo/catalogue.js, mysql/scripts).
   #    You have no workflow building them, so pull the originals.
-  #    'user' is here too: .github/workflows/user.yaml never pushes.
   # ---------------------------------------------------------------
   mongodb:
     image: robotshop/rs-mongodb:2.1.0
@@ -41,7 +40,7 @@ services:
     logging: *logging
 
   user:
-    image: robotshop/rs-user:2.1.0
+    image: ${DH_USER}/user:${USER_TAG}
     depends_on: [mongodb, redis]
     networks: [robot-shop]
     logging: *logging

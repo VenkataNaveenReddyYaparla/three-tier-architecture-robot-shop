@@ -68,7 +68,6 @@ web:
 # mongodb and mysql bake in the seed data (mongo/catalogue.js,
 # mysql/scripts) and no workflow builds them. Plain mongo/mysql
 # images would start empty.
-# user is here until .github/workflows/user.yaml pushes successfully.
 
 mongodb:
   image: robotshop/rs-mongodb:2.1.0
@@ -77,7 +76,7 @@ mysql:
   image: robotshop/rs-mysql-db:2.1.0
 
 user:
-  image: robotshop/rs-user:2.1.0
+  image: naveenreddy9/user:3
 
 # ---- images pinned directly in their templates ----
 

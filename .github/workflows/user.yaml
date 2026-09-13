@@ -7,6 +7,7 @@ on:
     paths:
       - 'user/**'  # Only trigger on changes to Python files (**.py)
       - '.github/workflows/user.yaml'  # Include workflow file changes
+      - '.github/workflows/user.yaml'  # Include workflow file changes
 
   pull_request:
     branches:
