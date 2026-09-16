@@ -1,0 +1,50 @@
+name: Publish EKS Helm Chart
+
+on:
+  workflow_dispatch:                     # manual trigger only - shows up as a "Run workflow" button in the Actions tab
+    inputs:
+      chart_version:
+        description: 'Chart version to package/push (leave blank to use the version already in Chart.yaml)'
+        required: false
+        type: string
+
+jobs:
+  helm-publish:
+    name: Package and push EKS helm chart to Docker Hub (OCI)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: EKS/helm       # all `run` steps below execute from this folder, so paths like "." and "Chart.yaml" resolve inside EKS/helm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7          # pulls the repo contents into the runner so the chart files exist to work on
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4          # installs the `helm` CLI on the runner
+        with:
+          version: 'v3.15.4'               # pinned version so behavior doesn't change unexpectedly when Helm releases a new version
+
+      - name: Set chart version (if provided)
+        if: ${{ inputs.chart_version != '' }}   # only runs when you typed a version into the chart_version input at trigger time
+        run: |
+          # replace the "version:" line in Chart.yaml with the version passed in from the workflow_dispatch input
+          sed -i "s/^version: .*/version: ${{ inputs.chart_version }}/" Chart.yaml
+
+      - name: Lint chart
+        run: helm lint .                   # validates the chart's structure/templates; fails the job early if the chart is malformed
+
+      - name: Package chart
+        run: helm package . -d dist        # bundles the chart into a versioned .tgz archive, written to the EKS/helm/dist folder
+
+      - name: Docker Hub login (helm registry)
+        # logs the helm CLI into Docker Hub's OCI registry so the next step is allowed to push
+        # DOCKERHUB_TOKEN is piped in via stdin instead of a plain flag so it never appears in process listings/logs
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | helm registry login registry-1.docker.io -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+
+      - name: Push chart to Docker Hub
+        run: |
+          # find the .tgz produced by the "Package chart" step (name includes the chart version, so it isn't fixed)
+          CHART_TGZ=$(ls dist/*.tgz)
+          # upload the chart as an OCI artifact under your Docker Hub namespace, e.g. oci://registry-1.docker.io/<your-username>/robot-shop
+          helm push "$CHART_TGZ" oci://registry-1.docker.io/${{ secrets.DOCKERHUB_USERNAME }}
